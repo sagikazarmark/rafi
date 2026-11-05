@@ -172,60 +172,65 @@ pub fn ThemeToggle(
 fn Home() -> Element {
     let documents = use_hook(crate::config::documents);
     rsx! {
-        div { class: "min-h-screen bg-base-100 bg-dots",
-            nav { class: "mx-auto flex max-w-6xl items-center gap-3 px-5 py-4",
+        // One screen on a laptop: the hero and the cards centred together in what the nav and the footer
+        // leave, so the footer sits at the bottom of a taller window.
+        div { class: "flex min-h-screen flex-col bg-base-100 bg-dots",
+            nav { class: "mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3",
                 Brand {}
                 span { class: "flex-1" }
                 ThemeToggle {}
                 Link { class: "btn btn-sm btn-ghost", to: Route::AdminHome {}, "Organizer login" }
             }
-            main { class: "mx-auto grid max-w-6xl items-center gap-12 px-5 pb-20 pt-10 lg:grid-cols-[1.2fr_1fr]",
-                div { class: "space-y-6",
-                    span { class: "badge badge-soft badge-secondary gap-1.5 font-semibold",
-                        Sparkles { class: "size-3.5" }
-                        "For meetups, conferences & community events"
-                    }
-                    h1 { class: "text-5xl font-extrabold leading-[1.05] sm:text-6xl",
-                        "Raffles that are "
-                        span { class: "gradient-text", "fun" }
-                        " and "
-                        span { class: "gradient-text", "provably fair." }
-                    }
-                    p { class: "max-w-xl text-lg text-base-content/70",
-                        "Show a QR code, let people join from their phones, and draw every prize live with public randomness nobody can predict, not even you."
-                    }
-                    div { class: "flex flex-wrap gap-3",
-                        Link { class: "btn btn-primary btn-lg hover-wiggle", to: Route::AdminHome {},
-                            Ticket { class: "size-5" }
-                            "Start a raffle"
+            // The hero and the cards closer together on a short window (1280×720 still fits).
+            main { class: "flex flex-1 flex-col justify-center gap-6 py-6 [@media(min-height:48rem)]:gap-12",
+                div { class: "mx-auto grid w-full max-w-6xl items-center gap-12 px-5 lg:grid-cols-[1.2fr_1fr]",
+                    div { class: "space-y-6",
+                        span { class: "badge badge-soft badge-secondary gap-1.5 font-semibold",
+                            Sparkles { class: "size-3.5" }
+                            "For meetups, conferences & community events"
                         }
-                        a { class: "btn btn-ghost btn-lg", href: "https://drand.love", target: "_blank",
-                            ShieldCheck { class: "size-5" }
-                            "How fairness works"
+                        h1 { class: "text-5xl font-extrabold leading-[1.05] sm:text-6xl",
+                            "Raffles that are "
+                            span { class: "gradient-text", "fun" }
+                            " and "
+                            span { class: "gradient-text", "provably fair." }
                         }
-                    }
-                }
-                div { class: "relative mx-auto w-full max-w-sm",
-                    div { class: "absolute -left-6 -top-6 size-24 rounded-full bg-accent/40 blur-2xl" }
-                    div { class: "absolute -bottom-8 -right-4 size-32 rounded-full bg-secondary/30 blur-2xl" }
-                    div { class: "ticket relative animate-float bg-primary p-8 text-primary-content shadow-xl",
-                        p { class: "text-sm font-semibold uppercase tracking-widest opacity-80", "You won!" }
-                        p { class: "font-display text-4xl font-extrabold", "KCD Budapest ticket" }
-                        div { class: "my-5 border-t-2 border-dashed border-primary-content/40" }
-                        div { class: "flex items-end justify-between",
-                            div {
-                                p { class: "text-xs uppercase tracking-widest opacity-70", "Claim code" }
-                                p { class: "claim-code text-3xl", "K7Q2" }
+                        p { class: "max-w-xl text-lg text-base-content/70",
+                            "Show a QR code, let people join from their phones, and draw every prize live with public randomness nobody can predict, not even you."
+                        }
+                        div { class: "flex flex-wrap gap-3",
+                            Link { class: "btn btn-primary btn-lg hover-wiggle", to: Route::AdminHome {},
+                                Ticket { class: "size-5" }
+                                "Start a raffle"
                             }
-                            Trophy { class: "size-12 opacity-90" }
+                            a { class: "btn btn-ghost btn-lg", href: "https://drand.love", target: "_blank",
+                                ShieldCheck { class: "size-5" }
+                                "How fairness works"
+                            }
+                        }
+                    }
+                    div { class: "relative mx-auto w-full max-w-sm",
+                        div { class: "absolute -left-6 -top-6 size-24 rounded-full bg-accent/40 blur-2xl" }
+                        div { class: "absolute -bottom-8 -right-4 size-32 rounded-full bg-secondary/30 blur-2xl" }
+                        div { class: "ticket relative animate-float bg-primary p-8 text-primary-content shadow-xl",
+                            p { class: "text-sm font-semibold uppercase tracking-widest opacity-80", "You won!" }
+                            p { class: "font-display text-4xl font-extrabold", "KCD Budapest ticket" }
+                            div { class: "my-5 border-t-2 border-dashed border-primary-content/40" }
+                            div { class: "flex items-end justify-between",
+                                div {
+                                    p { class: "text-xs uppercase tracking-widest opacity-70", "Claim code" }
+                                    p { class: "claim-code text-3xl", "K7Q2" }
+                                }
+                                Trophy { class: "size-12 opacity-90" }
+                            }
                         }
                     }
                 }
-            }
-            section { class: "mx-auto grid max-w-6xl gap-4 px-5 pb-16 md:grid-cols-3",
-                Feature { icon: rsx! { QrCode { class: "size-6" } }, title: "Scan & join", body: "No app, no account. A name and an email on any phone, even on shaky venue wifi." }
-                Feature { icon: rsx! { Dice5 { class: "size-6" } }, title: "Drawn in public", body: "Every prize commits to a future drand round first. The countdown is the suspense." }
-                Feature { icon: rsx! { ShieldCheck { class: "size-6" } }, title: "Check it yourself", body: "Anyone can re-run every draw in the browser afterwards. Personal data is erased on a date entrants see before they join." }
+                section { class: "mx-auto grid w-full max-w-6xl gap-4 px-5 md:grid-cols-3",
+                    Feature { icon: rsx! { QrCode { class: "size-6" } }, title: "Scan & join", body: "No app, no account. A name and an email on any phone, even on shaky venue wifi." }
+                    Feature { icon: rsx! { Dice5 { class: "size-6" } }, title: "Drawn in public", body: "Every prize commits to a future drand round first. The countdown is the suspense." }
+                    Feature { icon: rsx! { ShieldCheck { class: "size-6" } }, title: "Check it yourself", body: "Anyone can re-run every draw in the browser afterwards. Personal data is erased on a date entrants see before they join." }
+                }
             }
             // The operator's documents, those they have provided.
             if documents.terms || documents.privacy {
