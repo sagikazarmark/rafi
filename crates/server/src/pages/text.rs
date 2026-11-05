@@ -2,12 +2,12 @@
 //! documents: text pages.
 
 use dioxus::prelude::*;
-use dioxus_icons::lucide::ArrowLeft;
+use dioxus_icons::lucide::{ArrowLeft, ArrowUp, ChevronDown, ListOrdered, ScrollText, Ticket};
 pub use rafi_lifecycle::settings::ErasureDates;
 
 pub use crate::config::Hosting;
 
-use super::participant::{Raffle, document};
+use super::participant::{Raffle, THEME_SCRIPT, document, theme_button};
 
 /// Who runs the raffle, as the rules and the privacy notice name them.
 #[derive(Debug, Clone, Copy)]
@@ -122,38 +122,177 @@ impl From<&str> for Para {
     }
 }
 
-/// A text page: headed sections of paragraphs, with a link back to `back`
-/// (the participant page, or the site).
-fn text_page(title: &str, back: String, sections: Vec<(String, Vec<Para>)>) -> String {
-    let title_owned = title.to_owned();
-    let body = dioxus::ssr::render_element(rsx! {
-        main { class: "mx-auto flex max-w-2xl flex-col gap-4 px-4 py-8",
-            a { class: "btn btn-ghost btn-sm w-fit", href: "{back}",
-                ArrowLeft { class: "size-4" }
-                "rafi"
+/// A heading of a long text, as its table of contents links it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Heading {
+    id: String,
+    label: String,
+}
+
+/// Where a text page's back link goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Back<'a> {
+    /// The site's home page: the logo links there too.
+    Home,
+    /// The raffle's participant page.
+    Raffle(&'a str),
+}
+
+/// The logo, as the web app's header shows it: a tilted ticket and the
+/// wordmark.
+fn brand() -> Element {
+    rsx! {
+        span { class: "brand text-xl",
+            span { class: "grid place-items-center rounded-xl bg-primary p-1.5 text-primary-content -rotate-6 shadow-sm",
+                Ticket { class: "size-5" }
             }
-            h1 { class: "text-3xl font-extrabold", "{title_owned}" }
-            for (heading , paras) in sections {
-                section { class: "card bg-base-100 shadow-sm ring-1 ring-base-300",
-                    div { class: "card-body gap-2",
-                        h2 { class: "card-title text-lg", "{heading}" }
-                        for p in paras {
-                            match p {
-                                Para::Text(text) => rsx! { p { class: "text-base-content/80", "{text}" } },
-                                Para::Link { text, href, label } => rsx! {
-                                    p { class: "text-base-content/80",
-                                        "{text} "
-                                        a { class: "link link-primary", href: "{href}", rel: "noopener", "{label}" }
-                                    }
-                                },
+            "rafi"
+        }
+    }
+}
+
+/// The card a text page's content is set in.
+const SHEET: &str =
+    "rounded-box bg-base-100 px-5 py-8 shadow-sm ring-1 ring-base-300 sm:px-10 sm:py-12 lg:px-14";
+
+/// A text page: the logo, the colour scheme button and a link back, then
+/// `sheet` (an [`SHEET`] card), with its table of contents beside it on a
+/// wide screen and folded above it on a narrow one, when there is one.
+/// `to_top` adds a link back to the top below it, for a long text. The
+/// stylesheet scrolls to the links' targets smoothly (`.legal`'s page).
+fn text_shell(
+    title: &str,
+    back: Back<'_>,
+    contents: Vec<Heading>,
+    sheet: Element,
+    to_top: bool,
+) -> String {
+    let (back_href, back_label) = match back {
+        Back::Home => ("/".to_owned(), "Back home"),
+        Back::Raffle(code) => (rafi_api::routes::join(code), "Back to the raffle"),
+    };
+    let width = if contents.is_empty() {
+        "max-w-3xl"
+    } else {
+        "max-w-3xl lg:max-w-[67rem]"
+    };
+    let toc_link = "block py-1.5 text-base-content/75 transition-colors hover:text-primary";
+    let column = rsx! {
+        {sheet}
+        if to_top {
+            footer { class: "mt-8 flex justify-center text-sm text-base-content/60",
+                a { class: "link link-hover inline-flex items-center gap-1", href: "#top",
+                    ArrowUp { class: "size-4" }
+                    "Back to top"
+                }
+            }
+        }
+    };
+    let main = if contents.is_empty() {
+        rsx! { main { {column} } }
+    } else {
+        let narrow = contents.clone();
+        rsx! {
+            main { class: "lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-12",
+                aside { class: "hidden lg:block",
+                    nav { class: "sticky top-8 max-h-[calc(100dvh-4rem)] overflow-y-auto pb-4", aria_label: "On this page",
+                        p { class: "mb-3 text-xs font-bold uppercase tracking-wider text-base-content/60", "On this page" }
+                        ol { class: "border-l-[1.5px] border-base-300 text-sm",
+                            for Heading { id , label } in contents {
+                                li {
+                                    a { class: "-ml-[1.5px] border-l-[1.5px] border-transparent pl-4 hover:border-primary {toc_link}", href: "#{id}", "{label}" }
+                                }
                             }
+                        }
+                    }
+                }
+                div {
+                    details { class: "group mb-4 rounded-box bg-base-100 shadow-sm ring-1 ring-base-300 lg:hidden",
+                        summary { class: "flex cursor-pointer list-none items-center gap-2 px-5 py-3.5 font-semibold [&::-webkit-details-marker]:hidden",
+                            ListOrdered { class: "size-4 text-primary" }
+                            "On this page"
+                            span { class: "flex-1" }
+                            ChevronDown { class: "size-4 transition-transform group-open:rotate-180" }
+                        }
+                        nav { aria_label: "On this page",
+                            ol { class: "border-t-[1.5px] border-base-300 px-5 py-2 text-sm",
+                                for Heading { id , label } in narrow {
+                                    li { a { class: "{toc_link}", href: "#{id}", "{label}" } }
+                                }
+                            }
+                        }
+                    }
+                    {column}
+                }
+            }
+        }
+    };
+    let body = dioxus::ssr::render_element(rsx! {
+        div { id: "top", class: "mx-auto w-full {width} pt-[max(1.25rem,env(safe-area-inset-top))] pr-[max(1rem,env(safe-area-inset-right))] pb-[max(3rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] sm:px-6 sm:pt-8",
+            header { class: "mb-6 flex items-center gap-3 sm:mb-10",
+                if back == Back::Home {
+                    a { class: "rounded-xl", href: "/", {brand()} }
+                } else {
+                    {brand()}
+                }
+                span { class: "flex-1" }
+                div { class: "flex items-center gap-1",
+                    {theme_button()}
+                    a { class: "btn btn-ghost btn-sm rounded-full", href: "{back_href}",
+                        ArrowLeft { class: "size-4" }
+                        "{back_label}"
+                    }
+                }
+            }
+            {main}
+        }
+    });
+    document(
+        title,
+        body,
+        Some(format!("<script>{THEME_SCRIPT}</script>")),
+        None,
+    )
+}
+
+/// A raffle's text page: headed sections of paragraphs, under `kind` ("Rules"),
+/// with a link back to the raffle's participant page.
+fn text_page(kind: &str, raffle: &Raffle<'_>, sections: Vec<(String, Vec<Para>)>) -> String {
+    let raffle_title = raffle.title.to_owned();
+    let kind_owned = kind.to_owned();
+    let sheet = rsx! {
+        article { class: SHEET,
+            p { class: "inline-flex max-w-full items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary",
+                Ticket { class: "size-4 shrink-0" }
+                span { class: "truncate", "{raffle_title}" }
+            }
+            div { class: "legal mt-5",
+                h1 { "{kind_owned}" }
+                for (heading , paras) in sections {
+                    h2 { "{heading}" }
+                    for p in paras {
+                        match p {
+                            Para::Text(text) => rsx! { p { "{text}" } },
+                            Para::Link { text, href, label } => rsx! {
+                                p {
+                                    "{text} "
+                                    a { href: "{href}", rel: "noopener", "{label}" }
+                                }
+                            },
                         }
                     }
                 }
             }
         }
-    });
-    document(title, body, None, None)
+    };
+    let title = format!("{kind} — {}", raffle.title);
+    text_shell(
+        &title,
+        Back::Raffle(raffle.join_code),
+        Vec::new(),
+        sheet,
+        true,
+    )
 }
 
 /// The raffle rules page, as HTML.
@@ -205,8 +344,7 @@ pub fn rules(r: &Rules<'_>) -> String {
                 .collect(),
         ));
     }
-    let title = format!("Rules — {}", r.raffle.title);
-    text_page(&title, rafi_api::routes::join(r.raffle.join_code), sections)
+    text_page("Rules", &r.raffle, sections)
 }
 
 /// The raffle's privacy notice, as HTML: the controller, what is collected
@@ -289,8 +427,7 @@ pub fn privacy(p: &Privacy<'_>) -> String {
     if !own.is_empty() {
         sections.push(("From the organizer".into(), own));
     }
-    let title = format!("Privacy notice — {}", raffle.title);
-    text_page(&title, rafi_api::routes::join(raffle.join_code), sections)
+    text_page("Privacy notice", raffle, sections)
 }
 
 /// The notice's section for the people the organizer adds (one by one, or
@@ -398,32 +535,34 @@ fn processors(operator: &Operator<'_>) -> Vec<Para> {
 /// there ("a privacy notice").
 pub fn legal(title: &str, doc: Option<(&str, &str)>, missing: &str) -> String {
     let title_owned = title.to_owned();
-    let content = match doc {
+    let (sheet, contents, to_top) = match doc {
         Some((version, markdown_text)) => {
-            let html = markdown(markdown_text);
+            let Markdown { html, contents } = markdown(markdown_text);
             let version = version.to_owned();
-            rsx! {
-                p { class: "text-sm text-base-content/60", "{title_owned} · version {version}" }
-                article { class: "prose card bg-base-100 p-6 shadow-sm ring-1 ring-base-300 max-w-none",
-                    dangerous_inner_html: "{html}"
+            let sheet = rsx! {
+                article { class: SHEET,
+                    p { class: "inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary",
+                        ScrollText { class: "size-4 shrink-0" }
+                        "{title_owned} · version {version}"
+                    }
+                    div { class: "legal mt-5", dangerous_inner_html: "{html}" }
                 }
-            }
+            };
+            (sheet, contents, true)
         }
-        None => rsx! {
-            h1 { class: "text-3xl font-extrabold", "{title_owned}" }
-            p { class: "text-base-content/80", "The operator of this service hasn't provided {missing}." }
-        },
+        None => {
+            let sheet = rsx! {
+                article { class: SHEET,
+                    div { class: "legal",
+                        h1 { "{title_owned}" }
+                        p { "The operator of this service hasn't provided {missing}." }
+                    }
+                }
+            };
+            (sheet, Vec::new(), false)
+        }
     };
-    let body = dioxus::ssr::render_element(rsx! {
-        main { class: "mx-auto flex max-w-2xl flex-col gap-4 px-4 py-8",
-            a { class: "btn btn-ghost btn-sm w-fit", href: "/",
-                ArrowLeft { class: "size-4" }
-                "rafi"
-            }
-            {content}
-        }
-    });
-    document(title, body, None, None)
+    text_shell(title, Back::Home, contents, sheet, to_top)
 }
 
 /// Whether a link may point there: a web page, a mail address or a place on
@@ -439,37 +578,113 @@ fn safe_link(dest: &str) -> bool {
         || dest.starts_with('/')
 }
 
+/// A document's Markdown, rendered: its HTML, and its sections (its second
+/// level headings, each given an `id`) for the table of contents.
+#[derive(Debug)]
+struct Markdown {
+    html: String,
+    contents: Vec<Heading>,
+}
+
+/// An `id` for a heading: its words, lowercased and joined with dashes.
+fn slug(label: &str) -> String {
+    let words: Vec<String> = label
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    if words.is_empty() {
+        "section".to_owned()
+    } else {
+        words.join("-")
+    }
+}
+
 /// Markdown as HTML: CommonMark with tables, strikethrough and footnotes;
 /// raw HTML in the source is escaped, never passed through, and a link or
 /// image to anything but a web page, a mail address or this page is
 /// rendered as its text. Tables' columns are left unaligned: pulldown-cmark
 /// aligns them with `style` attributes, which the pages' Content-Security-Policy
-/// doesn't apply (`crate::csp`), so the markup carries none.
-fn markdown(text: &str) -> String {
-    use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd, html};
+/// doesn't apply (`crate::csp`), so the markup carries none; each table is
+/// wrapped in a `div` that scrolls it sideways on a narrow screen. Second
+/// level headings get an `id` the table of contents links to (never `top`,
+/// the page's own).
+fn markdown(text: &str) -> Markdown {
+    use pulldown_cmark::{
+        Alignment, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html,
+    };
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_FOOTNOTES;
     let mut dropped: usize = 0;
-    let parser = Parser::new_ext(text, options).filter_map(|event| match event {
-        Event::Html(raw) | Event::InlineHtml(raw) => Some(Event::Text(raw)),
-        Event::Start(Tag::Table(columns)) => Some(Event::Start(Tag::Table(
-            columns.iter().map(|_| Alignment::None).collect(),
-        ))),
-        Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. })
-            if !safe_link(&dest_url) =>
-        {
-            dropped += 1;
-            None
+    let mut events: Vec<Event<'_>> = Parser::new_ext(text, options)
+        .filter_map(|event| match event {
+            Event::Html(raw) | Event::InlineHtml(raw) => Some(Event::Text(raw)),
+            Event::Start(Tag::Table(columns)) => Some(Event::Start(Tag::Table(
+                columns.iter().map(|_| Alignment::None).collect(),
+            ))),
+            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. })
+                if !safe_link(&dest_url) =>
+            {
+                dropped += 1;
+                None
+            }
+            Event::End(TagEnd::Link | TagEnd::Image) if dropped > 0 => {
+                dropped -= 1;
+                None
+            }
+            other => Some(other),
+        })
+        .collect();
+
+    let mut contents: Vec<Heading> = Vec::new();
+    for i in 0..events.len() {
+        if !matches!(
+            events[i],
+            Event::Start(Tag::Heading {
+                level: HeadingLevel::H2,
+                ..
+            })
+        ) {
+            continue;
         }
-        Event::End(TagEnd::Link | TagEnd::Image) if dropped > 0 => {
-            dropped -= 1;
-            None
+        let label: String = events[i + 1..]
+            .iter()
+            .take_while(|e| !matches!(e, Event::End(TagEnd::Heading(_))))
+            .filter_map(|e| match e {
+                Event::Text(t) | Event::Code(t) => Some(t.as_ref()),
+                Event::SoftBreak | Event::HardBreak => Some(" "),
+                _ => None,
+            })
+            .collect();
+        let label = label.trim().to_owned();
+        let base = slug(&label);
+        let mut id = base.clone();
+        let mut n = 1;
+        // `top` is the page's own: the link back to the top.
+        while id == "top" || contents.iter().any(|h| h.id == id) {
+            n += 1;
+            id = format!("{base}-{n}");
         }
-        other => Some(other),
+        if let Event::Start(Tag::Heading { id: slot, .. }) = &mut events[i] {
+            *slot = Some(CowStr::from(id.clone()));
+        }
+        contents.push(Heading { id, label });
+    }
+
+    let events = events.into_iter().flat_map(|event| match event {
+        Event::Start(Tag::Table(_)) => vec![
+            Event::Html(CowStr::Borrowed("<div class=\"legal-table\">")),
+            event,
+        ],
+        Event::End(TagEnd::Table) => vec![event, Event::Html(CowStr::Borrowed("</div>"))],
+        other => vec![other],
     });
     let mut out = String::with_capacity(text.len() * 2);
-    html::push_html(&mut out, parser);
-    out
+    html::push_html(&mut out, events);
+    Markdown {
+        html: out,
+        contents,
+    }
 }
 
 #[cfg(test)]
@@ -478,7 +693,7 @@ mod tests {
 
     #[test]
     fn markdown_renders_and_escapes_html() {
-        let html = markdown("# Terms\n\nA **bold** <script>alert(1)</script> line.");
+        let html = markdown("# Terms\n\nA **bold** <script>alert(1)</script> line.").html;
         assert!(html.contains("<h1>Terms</h1>"));
         assert!(html.contains("<strong>bold</strong>"));
         assert!(!html.contains("<script>"), "{html}");
@@ -487,7 +702,7 @@ mod tests {
         // else is rendered as its text.
         let html = markdown(
             "[site](https://example.org) [mail](mailto:p@example.org) [here](#top) [own](/privacy) [bad](javascript:alert(1)) [data](data:text/html,x)",
-        );
+        ).html;
         assert!(
             html.contains(r#"<a href="https://example.org">site</a>"#),
             "{html}"
@@ -508,12 +723,51 @@ mod tests {
 
     #[test]
     fn markdown_tables_carry_no_style() {
-        let html = markdown("| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n");
+        let html = markdown("| a | b | c |\n|:--|:-:|--:|\n| 1 | 2 | 3 |\n").html;
         assert!(
-            html.contains("<table>") && html.contains("<td>3</td>"),
+            html.contains("<div class=\"legal-table\"><table>")
+                && html.contains("<td>3</td>")
+                && html.contains("</table>\n</div>"),
             "{html}"
         );
         assert!(!html.contains("style="), "{html}");
+    }
+
+    #[test]
+    fn markdown_sections_are_linked() {
+        let doc = markdown(
+            "# Terms\n\n## 1. The service\n\nText.\n\n### Detail\n\n## Data processing (`GDPR` Art. 28)\n\n## 1. The service\n\n## Top\n",
+        );
+        assert_eq!(
+            doc.contents,
+            vec![
+                Heading {
+                    id: "1-the-service".into(),
+                    label: "1. The service".into()
+                },
+                Heading {
+                    id: "data-processing-gdpr-art-28".into(),
+                    label: "Data processing (GDPR Art. 28)".into()
+                },
+                Heading {
+                    id: "1-the-service-2".into(),
+                    label: "1. The service".into()
+                },
+                // The page's own `#top` stays the top.
+                Heading {
+                    id: "top-2".into(),
+                    label: "Top".into()
+                },
+            ]
+        );
+        assert!(
+            doc.html
+                .contains(r#"<h2 id="1-the-service">1. The service</h2>"#),
+            "{}",
+            doc.html
+        );
+        assert!(doc.html.contains("<h1>Terms</h1>"), "{}", doc.html);
+        assert!(doc.html.contains("<h3>Detail</h3>"), "{}", doc.html);
     }
 
     #[test]

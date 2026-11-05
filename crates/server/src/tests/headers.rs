@@ -92,7 +92,7 @@ async fn the_documents_also_show_images_from_elsewhere() {
     let (_, headers, _) = send(&router, get("/j/no-such-code")).await;
     let server_page = policy(&headers);
     for path in ["/privacy", "/terms"] {
-        let (status, headers, _) = send(&router, get(path)).await;
+        let (status, headers, page) = send(&router, get(path)).await;
         assert_eq!(status, StatusCode::OK, "{path}");
         let p = policy(&headers);
         assert_eq!(
@@ -105,6 +105,16 @@ async fn the_documents_also_show_images_from_elsewhere() {
             directive(&server_page, "script-src"),
             "{path}"
         );
+        // The head script and the theme button's.
+        let inline = crate::csp::inline_scripts(&page);
+        assert_eq!(inline.len(), 2, "{path}");
+        for script in inline {
+            assert!(
+                directive(&p, "script-src").contains(&crate::csp::hash_source(script)),
+                "{path}: {script:?} isn't allowed by {p}"
+            );
+        }
+        assert!(page.contains("id=\"theme\""), "{path}");
     }
 }
 
