@@ -110,7 +110,7 @@ pub fn Brand(#[props(default = "text-xl".to_string())] size: String) -> Element 
 
 /// Which Rafi this is and where its source is (AGPL §13: the people using
 /// it over the network are offered the source of the version they use),
-/// from the server's `/config.js`.
+/// from the server's `/config.js`, and who made it.
 #[component]
 pub fn Colophon(info: crate::config::Build) -> Element {
     rsx! {
@@ -122,6 +122,11 @@ pub fn Colophon(info: crate::config::Build) -> Element {
             }
             span { aria_hidden: "true", "·" }
             a { class: "link link-hover", href: "https://drand.love", target: "_blank", rel: "noopener", "Randomness by drand" }
+            span { aria_hidden: "true", "·" }
+            span {
+                "Made by "
+                a { class: "link link-hover", href: "https://sagikazarmark.com", target: "_blank", rel: "noopener", "Márk Sági-Kazár" }
+            }
         }
     }
 }
@@ -616,6 +621,11 @@ mod tests {
         assert!(
             html.contains("Rafi") && !html.contains("Source code"),
             "{html}"
+        );
+        assert!(
+            html.contains(r#"href="https://sagikazarmark.com""#)
+                && html.contains("Márk Sági-Kazár"),
+            "who made it: {html}"
         );
     }
 
