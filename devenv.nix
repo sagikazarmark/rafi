@@ -19,6 +19,15 @@ let
   state = config.devenv.state;
   port = name: config.processes.${name}.ports.http.value;
 
+  # The server's port, which `dx serve` proxies to: apps/web/Dioxus.toml names it, and dx has no way to take
+  # it from the environment. Allocated so that devenv reserves it (`dx serve` and the others don't get it);
+  # anything else holding it stops `devenv up`, rather than leaving the proxy pointing at it.
+  serverPort = 8788;
+  rafiPort = lib.throwIfNot (port "rafi" == serverPort) ''
+    rafi: port ${toString serverPort} is taken, and apps/web/Dioxus.toml proxies the web app's server paths to it.
+    Stop what is listening on it (`lsof -nP -iTCP:${toString serverPort} -sTCP:LISTEN`), then `devenv up` again.
+  '' serverPort;
+
   restateIngressUrl = "http://127.0.0.1:${toString (port "restate")}";
 
   # The app and the engine write the same SQLite file.
@@ -193,18 +202,19 @@ in
         restart.on = "never";
       };
 
-      # The server. `dx serve` proxies the server's paths to it on :8788 (apps/web/Dioxus.toml).
+      # The server. `dx serve` proxies the server's paths to it (apps/web/Dioxus.toml).
       processes.rafi = {
         exec = ''
           ${requireClerkKeys}
           exec cargo run -p rafi${rafiFeatures}
         '';
         cwd = root;
+        ports.http.allocate = serverPort;
         env = {
           RAFI_PUBLIC_URL = "http://localhost:${toString (port "dioxus")}";
           RAFI_DATABASE_URL = databaseUrl;
           RESTATE_INGRESS_URL = restateIngressUrl;
-          PORT = "8788";
+          PORT = toString rafiPort;
         }
         // lib.optionalAttrs (!cfg.clerk) {
           RAFI_DEV_AUTH = "1";
@@ -212,7 +222,7 @@ in
         // lib.optionalAttrs cfg.mockDrand {
           RAFI_DRAND_CHAIN = "mock";
         };
-        ready.exec = "curl -fsS -o /dev/null http://127.0.0.1:8788/healthz";
+        ready.exec = "curl -fsS -o /dev/null http://127.0.0.1:${toString rafiPort}/healthz";
         # After the participant build, whose loader `cargo run` compiles in;
         # and again on a new one.
         after = [ "devenv:processes:participant@completed" ];
@@ -254,7 +264,9 @@ in
       dioxus.serve = {
         enable = true;
         directory = "apps/web";
-        port = 8787;
+        # Allocated from 8787 up, after the server's port (`seq` evaluates that first): with 8787 taken, devenv
+        # would otherwise hand `dx serve` the server's 8788 when it gets to it first.
+        port = builtins.seq rafiPort 8787;
       };
     })
 

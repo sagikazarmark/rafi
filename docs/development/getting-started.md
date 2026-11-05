@@ -55,7 +55,9 @@ Then open <http://localhost:8787/admin>. Draws use real drand, so they need inte
   URI, which is fine here, where no raffle in flight matters, and never in production (see
   [Upgrades](../operations/upgrades.md#registering-the-raffle-engine)).
 - The database (`rafi.db`) and Restate's data are in `.devenv/state`.
-- Ports other than the server's are allocated: if one is taken, devenv takes the next free one.
+- Ports are allocated: if one is taken, devenv takes the next free one, and the app is wherever `dx serve` ends up
+  (`devenv processes logs dioxus`). The server's is the exception: `apps/web/Dioxus.toml` proxies to `:8788`, so
+  devenv reserves it for the server, and `devenv up` stops if something else holds it.
 - `devenv up -d` runs in the background: `devenv processes logs rafi`, then `devenv down`.
 
 The stacks use dev auth: the server runs with `RAFI_DEV_AUTH`, and tells the web app so (`/config.js`). The `clerk`
