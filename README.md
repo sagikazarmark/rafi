@@ -1,8 +1,7 @@
 # Rafi
 
-[![CI](https://github.com/sagikazarmark/rafi/actions/workflows/ci.yaml/badge.svg)](https://github.com/sagikazarmark/rafi/actions/workflows/ci.yaml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/sagikazarmark/rafi/badge)](https://securityscorecards.dev/viewer/?uri=github.com/sagikazarmark/rafi)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/sagikazarmark/rafi/ci.yaml?style=flat-square)](https://github.com/sagikazarmark/rafi/actions/workflows/ci.yaml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/sagikazarmark/rafi/badge?style=flat-square)](https://securityscorecards.dev/viewer/?uri=github.com/sagikazarmark/rafi)
 
 **Live, verifiable raffles for meetups.**
 
