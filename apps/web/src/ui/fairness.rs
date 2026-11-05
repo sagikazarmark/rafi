@@ -304,7 +304,7 @@ fn WhereTheNumberComesFrom() -> Element {
                         body: "Every number is signed by the network. Anyone can check the signature, so Rafi can't fake one."
                     }
                     Property { icon: rsx! { Users { class: "size-5" } }, title: "Independent",
-                        body: "None of the members is the organizer, or whoever runs Rafi."
+                        body: "The randomness doesn't come from the organizer or from Rafi, and no single member of the network controls it."
                     }
                 }
             }
@@ -394,7 +394,7 @@ fn FromNumberToWinner() -> Element {
                         div { class: "flex flex-col items-center gap-2",
                             div { class: "flex items-center gap-2 rounded-box bg-base-200 px-4 py-3",
                                 ListOrdered { class: "size-5 text-primary" }
-                                span { class: "font-semibold", "No. 42 of 120" }
+                                span { class: "font-semibold", "No. 42 of 120 in the draw" }
                             }
                             ArrowDown { class: "size-5 text-base-content/40" }
                             div { class: "ticket w-full max-w-56 bg-primary px-6 py-4 text-center text-primary-content shadow-lg",
@@ -417,7 +417,7 @@ fn FromNumberToWinner() -> Element {
                 }
             }
             Callout { icon: rsx! { Dice5 { class: "size-6" } }, tone: "primary", title: "The same chance for everyone",
-                body: "It works like a die with one side per entrant. When a roll would favour some entrants over others, it's thrown away and rolled again, so every entrant has exactly the same chance."
+                body: "It works like a die with one side for each person still in the draw. When a roll would favour some of them over others, it's thrown away and rolled again, so everyone has exactly the same chance."
             }
         }
     }
@@ -450,10 +450,10 @@ fn TheRules() -> Element {
                     body: "Winners must be at the event to take their prize. Nobody walks up for a name that was made up."
                 }
                 Rule { icon: rsx! { Megaphone { class: "size-6" } }, title: "Redraws happen in public",
-                    body: "If a winner isn't there or says no, the prize is drawn again with a new number, in front of the room."
+                    body: "If a winner isn't there or says no, they're out, and the prize is drawn again with a new number. The record shows both."
                 }
                 Rule { icon: rsx! { History { class: "size-6" } }, title: "Nothing disappears",
-                    body: "Every step stays on the raffle's public record, and once the first prize is drawn, the raffle can't be deleted."
+                    body: "Every draw, redraw and withdrawn prize stays on the raffle's public record. Once the first draw starts, the raffle can't be deleted."
                 }
                 Rule { icon: rsx! { Mail { class: "size-6" } }, title: "One entry per person",
                     body: "One entry per email address, with a quick check that you're not a bot when you join."
@@ -492,8 +492,9 @@ fn TheOrganizer() -> Element {
                             Can { "Set up the prizes and the list, until the draw starts" }
                             Can { "Add people who don't have a phone. The record counts them separately." }
                             Can { "Choose which prize to draw next" }
-                            Can { "Mark a winner as not here, or as declining, in front of the room" }
-                            Can { "Hide names on the public list" }
+                            Can { "Mark a winner as not here, or as declining. Both show on the record." }
+                            Can { "Withdraw a prize that hasn't been drawn. That shows on the record too." }
+                            Can { "Hide or rename names on the public list" }
                         }
                     }
                 }
@@ -507,8 +508,8 @@ fn TheOrganizer() -> Element {
                             Cannot { "Pick the winner, or the number" }
                             Cannot { "Add or remove anyone once the list is locked" }
                             Cannot { "Draw a prize again without it showing on the record" }
-                            Cannot { "Swap the number when drand is slow" }
-                            Cannot { "Delete the raffle once the first prize is drawn" }
+                            Cannot { "Get a different number by pressing Draw again" }
+                            Cannot { "Delete the raffle once the first draw has started" }
                         }
                     }
                 }
@@ -585,7 +586,7 @@ fn PrivacyAndLimits() -> Element {
                     ul { class: "list-disc space-y-2 pl-5 text-base-content/70",
                         li { "The draw only uses random, anonymous IDs." }
                         li { "Your email address is never published." }
-                        li { "Names are erased on a date you see before you join. The IDs stay, so the draw can still be checked." }
+                        li { "Your name and email are erased on a date you see before you join (a winner's, once their prize is delivered). The IDs stay, so the draw can still be checked." }
                     }
                 }
             }
@@ -596,8 +597,8 @@ fn PrivacyAndLimits() -> Element {
                         "Where the guarantees end"
                     }
                     ul { class: "list-disc space-y-2 pl-5 text-base-content/70",
-                        li { "The draw is fair over the list it's given. Until the list is locked, the organizer can add people. The verification page counts who joined on their phones and who the organizer added, and lists everyone by name until their data is erased." }
-                        li { "If drand can't be reached, the organizer can abandon a draw and draw that prize again. It's the one lever left, and it's public: the record shows whom the abandoned number would have picked." }
+                        li { "The draw is fair over the list it's given. Until the list is locked, the organizer can add people. The verification page counts who joined on their phones and who the organizer added, and lists everyone (by name, unless a name is hidden) until their data is erased." }
+                        li { "If drand can't be reached, the organizer can abandon a draw and draw that prize again with a new number. It's the one lever left, and it's public: the verification page lists every abandoned draw, and the independent verifier shows whom its number would have picked." }
                     }
                 }
             }
