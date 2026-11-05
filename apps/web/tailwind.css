@@ -95,6 +95,10 @@
   --noise: 0;
 }
 
+/* A window tall enough for a page's roomier spacing (`tall:pt-10`); shorter
+ * ones (1280×720, say) get the tighter spacing it overrides. */
+@custom-variant tall (@media (min-height: 48rem));
+
 /* Bricolage Grotesque (variable weight), in Fontsource's subsets: the browser
  * fetches Latin Extended only for the letters it holds (ő, ű, ...). */
 @font-face {

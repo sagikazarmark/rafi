@@ -172,17 +172,16 @@ pub fn ThemeToggle(
 fn Home() -> Element {
     let documents = use_hook(crate::config::documents);
     rsx! {
-        // One screen on a laptop: the hero and the cards centred together in what the nav and the footer
-        // leave, so the footer sits at the bottom of a taller window.
+        // One screen on a laptop, the footer at the bottom of a taller window (`main` takes the rest);
+        // tighter on a short window (1280×720 still fits).
         div { class: "flex min-h-screen flex-col bg-base-100 bg-dots",
-            nav { class: "mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3",
+            nav { class: "mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3 tall:py-4",
                 Brand {}
                 span { class: "flex-1" }
                 ThemeToggle {}
                 Link { class: "btn btn-sm btn-ghost", to: Route::AdminHome {}, "Organizer login" }
             }
-            // The hero and the cards closer together on a short window (1280×720 still fits).
-            main { class: "flex flex-1 flex-col justify-center gap-6 py-6 [@media(min-height:48rem)]:gap-12",
+            main { class: "flex flex-1 flex-col gap-6 py-6 tall:gap-12 tall:pt-10",
                 div { class: "mx-auto grid w-full max-w-6xl items-center gap-12 px-5 lg:grid-cols-[1.2fr_1fr]",
                     div { class: "space-y-6",
                         span { class: "badge badge-soft badge-secondary gap-1.5 font-semibold",
