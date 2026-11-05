@@ -2,6 +2,7 @@
 
 mod admin;
 pub mod dates;
+mod fairness;
 mod forms;
 mod live;
 mod problem;
@@ -14,6 +15,7 @@ use dioxus_icons::lucide::{
 };
 
 use admin::{AdminHome, RaffleAdmin};
+use fairness::Fairness;
 use screen::Screen;
 use verify::Verify;
 
@@ -77,6 +79,8 @@ pub enum Route {
     Screen { slug: String },
     #[route("/v/:slug")]
     Verify { slug: String },
+    #[route("/fairness")]
+    Fairness {},
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
 }
@@ -106,7 +110,7 @@ pub fn Brand(#[props(default = "text-xl".to_string())] size: String) -> Element 
 
 /// Which Rafi this is and where its source is (AGPL §13: the people using
 /// it over the network are offered the source of the version they use),
-/// from the server's `/config.js`.
+/// from the server's `/config.js`, and who made it.
 #[component]
 pub fn Colophon(info: crate::config::Build) -> Element {
     rsx! {
@@ -118,6 +122,11 @@ pub fn Colophon(info: crate::config::Build) -> Element {
             }
             span { aria_hidden: "true", "·" }
             a { class: "link link-hover", href: "https://drand.love", target: "_blank", rel: "noopener", "Randomness by drand" }
+            span { aria_hidden: "true", "·" }
+            span {
+                "Made by "
+                a { class: "link link-hover", href: "https://sagikazarmark.com", target: "_blank", rel: "noopener", "Márk Sági-Kazár" }
+            }
         }
     }
 }
@@ -172,60 +181,64 @@ pub fn ThemeToggle(
 fn Home() -> Element {
     let documents = use_hook(crate::config::documents);
     rsx! {
-        div { class: "min-h-screen bg-base-100 bg-dots",
-            nav { class: "mx-auto flex max-w-6xl items-center gap-3 px-5 py-4",
+        // One screen on a laptop, the footer at the bottom of a taller window (`main` takes the rest);
+        // tighter on a short window (1280×720 still fits).
+        div { class: "flex min-h-screen flex-col bg-base-100 bg-dots",
+            nav { class: "mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3 tall:py-4",
                 Brand {}
                 span { class: "flex-1" }
                 ThemeToggle {}
                 Link { class: "btn btn-sm btn-ghost", to: Route::AdminHome {}, "Organizer login" }
             }
-            main { class: "mx-auto grid max-w-6xl items-center gap-12 px-5 pb-20 pt-10 lg:grid-cols-[1.2fr_1fr]",
-                div { class: "space-y-6",
-                    span { class: "badge badge-soft badge-secondary gap-1.5 font-semibold",
-                        Sparkles { class: "size-3.5" }
-                        "For meetups, conferences & community events"
-                    }
-                    h1 { class: "text-5xl font-extrabold leading-[1.05] sm:text-6xl",
-                        "Raffles that are "
-                        span { class: "gradient-text", "fun" }
-                        " and "
-                        span { class: "gradient-text", "provably fair." }
-                    }
-                    p { class: "max-w-xl text-lg text-base-content/70",
-                        "Show a QR code, let people join from their phones, and draw every prize live with public randomness nobody can predict, not even you."
-                    }
-                    div { class: "flex flex-wrap gap-3",
-                        Link { class: "btn btn-primary btn-lg hover-wiggle", to: Route::AdminHome {},
-                            Ticket { class: "size-5" }
-                            "Start a raffle"
+            main { class: "flex flex-1 flex-col gap-6 py-6 tall:gap-12 tall:pt-10",
+                div { class: "mx-auto grid w-full max-w-6xl items-center gap-12 px-5 lg:grid-cols-[1.2fr_1fr]",
+                    div { class: "space-y-6",
+                        span { class: "badge badge-soft badge-secondary gap-1.5 font-semibold",
+                            Sparkles { class: "size-3.5" }
+                            "For meetups, conferences & community events"
                         }
-                        a { class: "btn btn-ghost btn-lg", href: "https://drand.love", target: "_blank",
-                            ShieldCheck { class: "size-5" }
-                            "How fairness works"
+                        h1 { class: "text-5xl font-extrabold leading-[1.05] sm:text-6xl",
+                            "Raffles that are "
+                            span { class: "gradient-text", "fun" }
+                            " and "
+                            span { class: "gradient-text", "provably fair." }
                         }
-                    }
-                }
-                div { class: "relative mx-auto w-full max-w-sm",
-                    div { class: "absolute -left-6 -top-6 size-24 rounded-full bg-accent/40 blur-2xl" }
-                    div { class: "absolute -bottom-8 -right-4 size-32 rounded-full bg-secondary/30 blur-2xl" }
-                    div { class: "ticket relative animate-float bg-primary p-8 text-primary-content shadow-xl",
-                        p { class: "text-sm font-semibold uppercase tracking-widest opacity-80", "You won!" }
-                        p { class: "font-display text-4xl font-extrabold", "KCD Budapest ticket" }
-                        div { class: "my-5 border-t-2 border-dashed border-primary-content/40" }
-                        div { class: "flex items-end justify-between",
-                            div {
-                                p { class: "text-xs uppercase tracking-widest opacity-70", "Claim code" }
-                                p { class: "claim-code text-3xl", "K7Q2" }
+                        p { class: "max-w-xl text-lg text-base-content/70",
+                            "Show a QR code, let people join from their phones, and draw every prize live with public randomness nobody can predict, not even you."
+                        }
+                        div { class: "flex flex-wrap gap-3",
+                            Link { class: "btn btn-primary btn-lg hover-wiggle", to: Route::AdminHome {},
+                                Ticket { class: "size-5" }
+                                "Start a raffle"
                             }
-                            Trophy { class: "size-12 opacity-90" }
+                            Link { class: "btn btn-ghost btn-lg", to: Route::Fairness {},
+                                ShieldCheck { class: "size-5" }
+                                "How fairness works"
+                            }
+                        }
+                    }
+                    div { class: "relative mx-auto w-full max-w-sm",
+                        div { class: "absolute -left-6 -top-6 size-24 rounded-full bg-accent/40 blur-2xl" }
+                        div { class: "absolute -bottom-8 -right-4 size-32 rounded-full bg-secondary/30 blur-2xl" }
+                        div { class: "ticket relative animate-float bg-primary p-8 text-primary-content shadow-xl",
+                            p { class: "text-sm font-semibold uppercase tracking-widest opacity-80", "You won!" }
+                            p { class: "font-display text-4xl font-extrabold", "Conference ticket" }
+                            div { class: "my-5 border-t-2 border-dashed border-primary-content/40" }
+                            div { class: "flex items-end justify-between",
+                                div {
+                                    p { class: "text-xs uppercase tracking-widest opacity-70", "Claim code" }
+                                    p { class: "claim-code text-3xl", "K7Q2" }
+                                }
+                                Trophy { class: "size-12 opacity-90" }
+                            }
                         }
                     }
                 }
-            }
-            section { class: "mx-auto grid max-w-6xl gap-4 px-5 pb-16 md:grid-cols-3",
-                Feature { icon: rsx! { QrCode { class: "size-6" } }, title: "Scan & join", body: "No app, no account. A name and an email on any phone, even on shaky venue wifi." }
-                Feature { icon: rsx! { Dice5 { class: "size-6" } }, title: "Drawn in public", body: "Every prize commits to a future drand round first. The countdown is the suspense." }
-                Feature { icon: rsx! { ShieldCheck { class: "size-6" } }, title: "Check it yourself", body: "Anyone can re-run every draw in the browser afterwards. Personal data is erased on a date entrants see before they join." }
+                section { class: "mx-auto grid w-full max-w-6xl gap-4 px-5 md:grid-cols-3",
+                    Feature { icon: rsx! { QrCode { class: "size-6" } }, title: "Scan & join", body: "No app, no account. A name and an email on any phone, even on shaky venue wifi." }
+                    Feature { icon: rsx! { Dice5 { class: "size-6" } }, title: "Drawn in public", body: "Every prize commits to a future drand round first. The countdown is the suspense." }
+                    Feature { icon: rsx! { ShieldCheck { class: "size-6" } }, title: "Check it yourself", body: "Anyone can re-run every draw in the browser afterwards. Personal data is erased on a date entrants see before they join." }
+                }
             }
             // The operator's documents, those they have provided.
             if documents.terms || documents.privacy {
@@ -609,6 +622,11 @@ mod tests {
             html.contains("Rafi") && !html.contains("Source code"),
             "{html}"
         );
+        assert!(
+            html.contains(r#"href="https://sagikazarmark.com""#)
+                && html.contains("Márk Sági-Kazár"),
+            "who made it: {html}"
+        );
     }
 
     /// "Offline" when the browser says so, or when the raffle's view has
@@ -661,5 +679,18 @@ mod tests {
         let home = render("/", true);
         assert!(home.contains(r#"href="/admin/""#), "{home}");
         assert!(!home.contains(OPEN_AT_THE_TOP), "{home}");
+    }
+
+    /// "How fairness works" on the home page is the page here, not drand's
+    /// site; it explains the draw and links on to the admin.
+    #[test]
+    fn the_home_page_explains_fairness_here() {
+        let home = render("/", false);
+        assert!(home.contains(r#"href="/fairness""#), "{home}");
+
+        let fairness = render("/fairness", false);
+        assert!(fairness.contains("Nobody picks the winner."), "{fairness}");
+        assert!(fairness.contains("Check every draw yourself"), "{fairness}");
+        assert!(fairness.contains(r#"href="/admin/""#), "{fairness}");
     }
 }

@@ -37,11 +37,11 @@ fn doc(entrants: usize) -> Manifest {
         vec![
             ManifestItem {
                 id: "ticket-1".into(),
-                name: "KCD Budapest ticket".into(),
+                name: "Conference ticket".into(),
             },
             ManifestItem {
                 id: "voucher-1".into(),
-                name: "CNCF exam voucher".into(),
+                name: "Workshop voucher".into(),
             },
         ],
     )

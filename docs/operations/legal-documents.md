@@ -29,6 +29,9 @@ version: 2026-11
   organizers of directly.
 - On Workers, a push of `legal/` deploys them. Raw HTML in the Markdown is shown as text, and a link or image goes
   only to a web page, a mail address or a place on this site; any other is shown as its text.
+- Give the document one `#` heading, its title, and a `##` heading for each section: the page lists the sections
+  beside the text (folded above it on a phone), each linked to `#` and its words, lowercased and joined with
+  dashes (`## 4. Data processing` is `#4-data-processing`).
 
 ## Without them
 

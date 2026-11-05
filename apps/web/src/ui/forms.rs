@@ -161,7 +161,7 @@ pub fn CreateRaffleForm(on_created: EventHandler<String>) -> Element {
                 size: InputSize::Lg,
                 required: true,
                 maxlength: "{MAX_TITLE_CHARS}",
-                placeholder: "e.g. “Cloud Native Budapest — October”",
+                placeholder: "e.g. “Tech Meetup — October”",
                 prefix: rsx! { Sparkles { class: "size-5 text-secondary" } },
                 wrapper_attributes: dioxus_primitives::dioxus_attributes::attributes!(span { class: "w-full" }),
             }
@@ -359,7 +359,7 @@ pub fn PrizeForm(
                 label: "Prize",
                 required: true,
                 maxlength: "{MAX_TITLE_CHARS}",
-                placeholder: "e.g. KCD Budapest ticket",
+                placeholder: "e.g. Conference ticket",
                 class: "w-full",
             }
             InputField {

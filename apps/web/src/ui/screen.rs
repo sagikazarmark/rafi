@@ -582,7 +582,7 @@ mod tests {
             "recent_names": ["Anna Kovács", "Bea"], "prizes": [], "items": [], "current": null,
             "draws": [], "last_failure": null, "manifest_hash": null, "server_now_ms": 0,
             "test_mode": false, "verifiable": true, "registration": registration,
-            "organizer": "Cloud Native Budapest", "privacy_url": "https://rafi.example/privacy/meetup",
+            "organizer": "Tech Meetup", "privacy_url": "https://rafi.example/privacy/meetup",
             "verify_url": "https://rafi.example/v/meetup"
         }))
         .unwrap()
@@ -664,7 +664,7 @@ mod tests {
     fn the_intro_tells_the_people_on_the_list() {
         let html = dioxus_ssr::render_element(rsx! { Intro { view: view("ready", false) } });
         for present in [
-            "Everyone on <bdi>Cloud Native Budapest</bdi>&#39;s list is in the draw. Rather not? Tell the organizer before the draw.",
+            "Everyone on <bdi>Tech Meetup</bdi>&#39;s list is in the draw. Rather not? Tell the organizer before the draw.",
             "rafi.example/privacy/meetup",
         ] {
             assert!(html.contains(present), "{present}: {html}");

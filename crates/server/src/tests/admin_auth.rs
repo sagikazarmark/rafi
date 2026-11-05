@@ -411,7 +411,7 @@ async fn organization_tiers_gate_the_admin_api() {
             .cookie_for(
                 &clerk
                     .session(user)
-                    .with_organization("org_cnb")
+                    .with_organization("org_meetup")
                     .with_organization_role(role),
             )
             .unwrap()
@@ -423,7 +423,7 @@ async fn organization_tiers_gate_the_admin_api() {
         .cookie_for(
             &clerk
                 .session("user_perm")
-                .with_organization("org_cnb")
+                .with_organization("org_meetup")
                 .with_organization_role("org:member")
                 .with_organization_permissions(["org:raffles:manage"]),
         )
@@ -435,7 +435,7 @@ async fn organization_tiers_gate_the_admin_api() {
     let me: rafi_api::Me = serde_json::from_str(&body).unwrap();
     assert_eq!(
         (me.owner_id.as_str(), me.access, me.shared),
-        ("org_cnb", rafi_api::Access::Member, true)
+        ("org_meetup", rafi_api::Access::Member, true)
     );
     let (_, body) = call(&by_permission, "whoami", "").await;
     let me: rafi_api::Me = serde_json::from_str(&body).unwrap();
@@ -476,8 +476,8 @@ async fn organization_tiers_gate_the_admin_api() {
     assert_eq!(
         who,
         [
-            ("org_cnb".into(), "user_manager".into(), "create".into()),
-            ("org_cnb".into(), "user_member".into(), "ready".into()),
+            ("org_meetup".into(), "user_manager".into(), "create".into()),
+            ("org_meetup".into(), "user_member".into(), "ready".into()),
         ]
     );
     let (status, body) = call(&member, "delete_raffle", &format!(r#"{{"id":"{id}"}}"#)).await;

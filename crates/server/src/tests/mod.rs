@@ -212,7 +212,7 @@ async fn create(app: &AppState, owner: &str, title: &str) -> String {
 /// Names the organizer of raffle `id`, as registration needs.
 async fn name_organizer(app: &AppState, actor: service::Actor<'_>, id: &str) {
     let mut settings = service::settings_of(&raffles::get(&app.db, id).await.unwrap().unwrap());
-    settings.organizer_name = "Cloud Native Budapest".into();
+    settings.organizer_name = "Tech Meetup".into();
     settings.contact_email = "hello@example.com".into();
     service::update_settings(app, actor, id, settings)
         .await
@@ -220,7 +220,7 @@ async fn name_organizer(app: &AppState, actor: service::Actor<'_>, id: &str) {
 }
 
 async fn setup_open(app: &AppState, prizes: &[(&str, u32)]) -> RaffleRow {
-    let id = create(app, OWNER, "Cloud Native Budapest").await;
+    let id = create(app, OWNER, "Tech Meetup").await;
     for (i, (name, qty)) in prizes.iter().enumerate() {
         service::upsert_prize(
             app,

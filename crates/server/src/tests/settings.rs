@@ -169,7 +169,7 @@ async fn rules_are_fixed_once_an_entrant_locks_them() {
 async fn new_raffles_start_with_the_owners_defaults() {
     let app = app().await;
     let defaults = rafi_api::RaffleDefaults {
-        organizer_name: " Cloud Native Budapest ".into(),
+        organizer_name: " Tech Meetup ".into(),
         contact_email: "hello@example.com".into(),
         privacy_email: "dpo@example.com".into(),
         privacy_text: "We keep nothing else.".into(),
@@ -180,7 +180,7 @@ async fn new_raffles_start_with_the_owners_defaults() {
     };
     service::save_defaults(&app, ACTOR, defaults).await.unwrap();
     let saved = service::get_defaults(&app, OWNER).await.unwrap();
-    assert_eq!(saved.organizer_name, "Cloud Native Budapest", "trimmed");
+    assert_eq!(saved.organizer_name, "Tech Meetup", "trimmed");
     assert!(!saved.registration);
 
     let event = service::EventDate {
@@ -203,7 +203,7 @@ async fn new_raffles_start_with_the_owners_defaults() {
             r.registration,
         ),
         (
-            "Cloud Native Budapest",
+            "Tech Meetup",
             "hello@example.com",
             "dpo@example.com",
             "We keep nothing else.",

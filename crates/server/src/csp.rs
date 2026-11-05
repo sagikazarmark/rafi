@@ -8,10 +8,10 @@
 //!
 //! - **The server's pages** (`/j/`, `/rules/`, `/privacy/{slug}`, a 404, and
 //!   any HTML that doesn't say): scripts from this origin and the inline ones
-//!   by their hashes (the head script and the participant build's loader,
-//!   `pages::embedded_scripts`), WebAssembly, styles and images from this
-//!   origin (and `data:`, daisyUI's icons in the stylesheet), the live
-//!   channel's socket.
+//!   by their hashes (the head script, the participant build's loader and
+//!   the text pages' theme button, `pages::embedded_scripts`), WebAssembly,
+//!   styles and images from this origin (and `data:`, daisyUI's icons in the
+//!   stylesheet), the live channel's socket.
 //! - **The installation's documents** (`/privacy`, `/terms`): the same, and
 //!   images from any `https:` origin, which the operator's Markdown may link.
 //! - **The web app** (its `index.html`, `crate::shell`): the same as the

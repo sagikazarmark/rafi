@@ -100,6 +100,12 @@ pub(crate) const APPLY_THEME: &str = apply_theme!();
 /// scheme ([`APPLY_THEME`]).
 const HEAD_SCRIPT: &str = concat!("window.__rafiT0=Date.now();", apply_theme!());
 
+/// The text pages' script, at the end of the body: the [`theme_button`]
+/// cycles system → light → dark, as the participant page's does (its
+/// WebAssembly or fallback does it there), saving the choice where
+/// [`APPLY_THEME`] finds it.
+pub(crate) const THEME_SCRIPT: &str = r#"(function(){var b=document.getElementById("theme");if(!b)return;var m={system:["theme-icon-system","System theme"],rafi:["theme-icon-light","Light theme"],"rafi-dark":["theme-icon-dark","Dark theme"]};function c(){try{return localStorage.getItem("rafi-theme")||"system"}catch(e){return"system"}}function s(t){for(var k in m){var i=b.querySelector("."+m[k][0]);if(i)i.classList.toggle("hidden",k!==t)}var l=(m[t]||m.system)[1]+" (click to change)";b.title=l;b.setAttribute("aria-label",l)}s(c());b.addEventListener("click",function(){var n={system:"rafi",rafi:"rafi-dark","rafi-dark":"system"}[c()]||"system";try{if(n==="system"){localStorage.removeItem("rafi-theme");document.documentElement.removeAttribute("data-theme")}else{localStorage.setItem("rafi-theme",n);document.documentElement.setAttribute("data-theme",n)}}catch(e){}s(n)})})();"#;
+
 /// The page's loader, a `<script>`: imports the participant glue, which
 /// fetches the module by its hashed name and calls `main`; or starts the
 /// JavaScript fallback when there is no WebAssembly, the glue fails to
@@ -114,11 +120,12 @@ const HEAD_SCRIPT: &str = concat!("window.__rafiT0=Date.now();", apply_theme!())
 /// directory served is that build.
 pub const LOADER: &str = include_str!("../../../../apps/participant/build/public/index.html");
 
-/// The scripts the pages embed: [`HEAD_SCRIPT`] in every page, and the
-/// [`LOADER`]'s in the participant page. The pages' policy allows these by
-/// their hashes (`crate::csp`), and no others.
+/// The scripts the pages embed: [`HEAD_SCRIPT`] in every page, the
+/// [`LOADER`]'s in the participant page and [`THEME_SCRIPT`] in the text
+/// pages. The pages' policy allows these by their hashes (`crate::csp`),
+/// and no others.
 pub(crate) fn embedded_scripts() -> Vec<&'static str> {
-    let mut scripts = vec![HEAD_SCRIPT];
+    let mut scripts = vec![HEAD_SCRIPT, THEME_SCRIPT];
     scripts.extend(crate::csp::inline_scripts(LOADER));
     scripts
 }
@@ -190,11 +197,20 @@ fn header_bar(test_mode: bool) -> Element {
                 span { class: "badge badge-warning badge-sm font-bold", "🧪 TEST MODE" }
             }
             span { class: "flex-1" }
-            button { id: "theme", class: "btn btn-ghost btn-sm btn-circle", r#type: "button", aria_label: "Theme",
-                Monitor { class: "size-4 theme-icon-system" }
-                Sun { class: "size-4 theme-icon-light hidden" }
-                Moon { class: "size-4 theme-icon-dark hidden" }
-            }
+            {theme_button()}
+        }
+    }
+}
+
+/// The colour scheme button, showing the scheme in use: the participant
+/// page's WebAssembly (or its fallback) and the text pages'
+/// [`THEME_SCRIPT`] make it work.
+pub(super) fn theme_button() -> Element {
+    rsx! {
+        button { id: "theme", class: "btn btn-ghost btn-sm btn-circle", r#type: "button", aria_label: "Theme",
+            Monitor { class: "size-4 theme-icon-system" }
+            Sun { class: "size-4 theme-icon-light hidden" }
+            Moon { class: "size-4 theme-icon-dark hidden" }
         }
     }
 }

@@ -82,12 +82,30 @@ pub fn Verify(slug: String) -> Element {
                 div { class: "mx-auto flex max-w-5xl items-center gap-2 px-4 py-2.5",
                     Brand {}
                     span { class: "flex-1" }
+                    HowItWorks {}
                     ThemeToggle {}
                 }
             }
             main { class: "mx-auto max-w-5xl space-y-6 px-4 py-8", {body} }
             super::Colophon { info: build }
         }
+    }
+}
+
+/// "How it works": the fairness page. Framed on another site, in a new tab:
+/// only the verification page and the projector may be shown in a frame
+/// (`rafi_server::frameable`), and the router, changing pages without
+/// loading one, would show the fairness page in the framer's, where
+/// reloading it is refused.
+#[component]
+fn HowItWorks() -> Element {
+    let super::Framed(framed) = use_context();
+    let class = "btn btn-ghost btn-sm";
+    if framed {
+        let href = super::Route::Fairness {}.to_string();
+        rsx! { a { class, href, target: "_blank", rel: "noopener", "How it works" } }
+    } else {
+        rsx! { Link { class, to: super::Route::Fairness {}, "How it works" } }
     }
 }
 
@@ -571,6 +589,24 @@ fn Sources(sources: rafi_api::SourceCounts) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Framed on another site, "How it works" opens the fairness page in a
+    /// new tab: it may not be shown in the frame.
+    #[test]
+    fn framed_how_it_works_opens_a_new_tab() {
+        #[component]
+        fn Framed() -> Element {
+            use_context_provider(|| super::super::Framed(true));
+            rsx! { HowItWorks {} }
+        }
+        let html = dioxus_ssr::render_element(rsx! { Framed {} });
+        assert!(
+            html.contains(r#"href="/fairness""#)
+                && html.contains(r#"target="_blank""#)
+                && html.contains(r#"rel="noopener""#),
+            "{html}"
+        );
+    }
 
     /// A record in a format this page doesn't know is not checked: the
     /// page says a newer Rafi wrote it.
