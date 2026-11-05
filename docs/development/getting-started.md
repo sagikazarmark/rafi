@@ -55,6 +55,9 @@ Then open <http://localhost:8787/admin>. Draws use real drand, so they need inte
   URI, which is fine here, where no raffle in flight matters, and never in production (see
   [Upgrades](../operations/upgrades.md#registering-the-raffle-engine)).
 - The database (`rafi.db`) and Restate's data are in `.devenv/state`.
+- `/terms` and `/privacy` show placeholder documents, `testdata/legal/terms.md` and `privacy.md` (lorem ipsum, version
+  `dev-fixture`): the server gets `RAFI_DOCS_DIR` pointing there. To see your installation's own instead, set
+  `RAFI_DOCS_DIR` in `.env` to their directory, then `devenv up` again.
 - Ports are allocated: if one is taken, devenv takes the next free one, and the app is wherever `dx serve` ends up
   (`devenv processes logs dioxus`). The server's is the exception: `apps/web/Dioxus.toml` proxies to `:8788`, so
   devenv reserves it for the server, and `devenv up` stops if something else holds it.
@@ -81,10 +84,10 @@ local Workers state. Pass the same `--profile` flags to `devenv down` and `deven
 - **`workers`** runs the Worker (`wrangler-app`, <http://127.0.0.1:8787>; the raffle engine is in it, under
   `/restate`, registered with Restate over HTTP/1.1 once the Worker answers `/healthz`) with
   `wrangler dev --env dev`: dev auth and the mock chain. Before starting it, it applies the D1 migrations
-  (devenv-extras' `wrangler.dev.app.d1.migrate`), and builds the static files (`just apps/worker/ assets`) when
-  their sources changed, when something else built them, or for the other auth. The first build takes a few
-  minutes. The Worker's local data (D1, Durable Objects) lives in the profile's `state/wrangler/state/app` and is
-  kept across restarts.
+  (devenv-extras' `wrangler.dev.app.d1.migrate`), and builds the static files (`just apps/worker/ assets`, then
+  the placeholder legal documents from `testdata/legal` into their `legal/`) when their sources changed, when
+  something else built them, or for the other auth. The first build takes a few minutes. The Worker's local data
+  (D1, Durable Objects) lives in the profile's `state/wrangler/state/app` and is kept across restarts.
 - **`clerk`** signs the organizer in with Clerk. It needs `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`, from
   [Clerk's dashboard](https://dashboard.clerk.com) (API keys; a development instance accepts `localhost`), in `.env`
   at the project root, which the shell loads. Both keys are the server's (or the app Worker's, which reads `.env`
@@ -125,7 +128,8 @@ RAFI_DEV_AUTH=1 RAFI_PUBLIC_URL=http://localhost:8787 PORT=8788 cargo run -p raf
 cd apps/web && dx serve --port 8787
 ```
 
-Then open <http://localhost:8787/admin>.
+Then open <http://localhost:8787/admin>. For `/terms` and `/privacy` to show the placeholder documents, add
+`RAFI_DOCS_DIR=testdata/legal` to the server's command.
 
 ### With draws (Restate)
 

@@ -57,6 +57,11 @@ let
     ];
   };
 
+  # Placeholder terms and privacy notice, so /terms and /privacy show a whole
+  # document in development: the server reads them from RAFI_DOCS_DIR, the
+  # Worker from legal/ among its static files.
+  legalFixtures = "${root}/testdata/legal";
+
   features = lib.optionalString cfg.mockDrand " --features mock-drand";
   # The server allows RAFI_DEV_AUTH only when built with `dev`.
   rafiFeatures = " --features dev" + lib.optionalString cfg.mockDrand ",mock-drand";
@@ -82,6 +87,7 @@ let
     "apps/participant/Cargo.toml"
     "apps/participant/Dioxus.toml"
     "apps/worker/_headers"
+    "testdata/legal"
     "crates"
     "Cargo.lock"
   ];
@@ -206,6 +212,8 @@ in
       processes.rafi = {
         exec = ''
           ${requireClerkKeys}
+          # The fixture legal documents, unless .env names others (an installation's own).
+          export RAFI_DOCS_DIR="''${RAFI_DOCS_DIR:-${legalFixtures}}"
           exec cargo run -p rafi${rafiFeatures}
         '';
         cwd = root;
@@ -301,16 +309,20 @@ in
 
       tasks = {
         # The web app bundle and the participant build ->
-        # apps/worker/worker-assets (`just assets` there).
+        # apps/worker/worker-assets (`just assets` there), then the fixture
+        # legal documents into its legal/ (`just assets` copies none: an
+        # installation's deploy brings its own).
         "rafi:app-assets" = {
           exec = ''
             just apps/worker/ assets
+            cp -R ${legalFixtures} ${appAssets}/legal
             mkdir -p "$(dirname ${appAssetsStamp})"
             touch ${appAssetsStamp}
           '';
           status = ''
             [ -f ${appAssetsStamp} ] \
               && [ -f ${appAssets}/_headers ] \
+              && [ -d ${appAssets}/legal ] \
               && [ -f ${webShell} ] \
               && [ -z "$(find ${appAssets}/_headers ${lib.concatStringsSep " " appAssetsSources} \
                 -newer ${appAssetsStamp} ! -path apps/web/assets/tailwind.css -print -quit)" ]
