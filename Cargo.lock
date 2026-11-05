@@ -2044,9 +2044,9 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "drand"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a4135d94c872520fd9bd42bfe24f0905b63492cb5f4417f67b6e035250331a8"
+checksum = "4abbd9cab41e2828d432d44efcb54f7edf0d954352c410e2d35fd62d056da170"
 dependencies = [
  "ark-bls12-381",
  "ark-ec",
@@ -5439,9 +5439,9 @@ dependencies = [
 
 [[package]]
 name = "restate-config"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "249b8de93d92d6c5d57252dd664c45eb87ee43515084a19392f75d325ba2d747"
+checksum = "d3b98d521afbfe3458e8f1dca3a1fc85edb5dc78015f7e9b6b6d12125f80edd3"
 dependencies = [
  "humantime-serde",
  "restate-sdk",
@@ -5451,9 +5451,9 @@ dependencies = [
 
 [[package]]
 name = "restate-drand"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef4e8b1747b6be5a0e99534393641ab8ff27100ef75a6c2deffdc6736e47492"
+checksum = "5b4388909bdac208160a50e2a0d07f806ace772ff8ef3043e201bdac16dd3ab0"
 dependencies = [
  "anyhow",
  "drand",
@@ -5466,9 +5466,9 @@ dependencies = [
 
 [[package]]
 name = "restate-e2e-harness"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdf73525bd15abe04dc1b0c63180f540c0fa750a34555846a8eba2dacbc76f76"
+checksum = "05eebf5465d8047d8e3f9a462b8b6d912088b9d6053811a707c4cbb4ffc2894a"
 dependencies = [
  "hyper",
  "hyper-util",
@@ -5483,9 +5483,9 @@ dependencies = [
 
 [[package]]
 name = "restate-ext"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67913c01ef69d826f82a10880ef31beaa804af366598f7d87531b800085ff796"
+checksum = "06ef56ac8d1e836f4bd67eae8c8e6a21d5ade86e6e52090d753fea19007c6fb3"
 dependencies = [
  "restate-sdk",
  "tokio",
@@ -5495,8 +5495,8 @@ dependencies = [
 
 [[package]]
 name = "restate-sdk"
-version = "0.12.1"
-source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea#91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea"
+version = "0.13.0"
+source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=b20d2050efbb762c3737a96cf44f7fd9c1807c4e#b20d2050efbb762c3737a96cf44f7fd9c1807c4e"
 dependencies = [
  "bytes",
  "futures",
@@ -5529,8 +5529,8 @@ dependencies = [
 
 [[package]]
 name = "restate-sdk-macros"
-version = "0.12.1"
-source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea#91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea"
+version = "0.13.0"
+source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=b20d2050efbb762c3737a96cf44f7fd9c1807c4e#b20d2050efbb762c3737a96cf44f7fd9c1807c4e"
 dependencies = [
  "jiff",
  "proc-macro2",
@@ -5540,9 +5540,9 @@ dependencies = [
 
 [[package]]
 name = "restate-sdk-shared-core"
-version = "7.0.3"
+version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4a8731358ce185d1c9663d3ac97414acf7c0d642e5724864ade03fcccb85134"
+checksum = "bfd8d132e369af9310530b57c3e352a81cfad54e79d8d38fc5d7de9026ad2dfa"
 dependencies = [
  "base64 0.22.1",
  "bs58",

@@ -25,14 +25,14 @@ rafi-cloudflare-app = { path = "crates/cloudflare-app" }
 rafi-cloudflare-engine = { path = "crates/cloudflare-engine" }
 rafi-app = { path = "crates/app" }
 rafi-server = { path = "crates/server" }
-drand = { version = "0.4", default-features = false }
-restate-drand = { version = "0.4", default-features = false }
+drand = { version = "0.5", default-features = false }
+restate-drand = { version = "0.5", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 hex = "0.4"
 thiserror = "2"
-restate-sdk = { version = "0.12", default-features = false }
+restate-sdk = { version = "0.13", default-features = false }
 # Shared across the workspace at one version; each member adds its features.
 anyhow = "1"
 js-sys = "0.3"
@@ -61,4 +61,4 @@ codegen-units = 1
 # released. Pinned to a commit of the `wasm` branch: `worker-build` doesn't
 # pass `--locked`, so a branch alone could move under a deploy.
 [patch.crates-io]
-restate-sdk = { git = "https://github.com/sagikazarmark/restate-sdk-rust", rev = "91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea" }
+restate-sdk = { git = "https://github.com/sagikazarmark/restate-sdk-rust", rev = "b20d2050efbb762c3737a96cf44f7fd9c1807c4e" }
