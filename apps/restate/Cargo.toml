@@ -1,0 +1,40 @@
+[package]
+name = "rafi-restate"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The native Rafi raffle engine: an endpoint serving the Raffle virtual object and EngineInfo to Restate"
+publish = false
+
+[[bin]]
+name = "rafi-restate"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+# The drand client's relays, asked over reqwest.
+drand = { workspace = true, features = ["reqwest", "rustls"] }
+rafi-engine = { workspace = true, features = ["drand"] }
+rafi-engine-restate = { workspace = true }
+rafi-store = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+figment = { version = "0.10", features = ["env", "json", "toml"] }
+restate-config = "0.3"
+restate-ext = { version = "0.3", features = ["shutdown"] }
+# `http_server` serves the endpoint; `rust_crypto` verifies configured identity keys;
+# `tracing-span-filter` provides the filter that drops log lines re-emitted on replay.
+restate-sdk = { workspace = true, features = ["http_server", "rust_crypto", "tracing-span-filter"] }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[features]
+## Allow `drand.mock = true`: draws from a public test chain (development only).
+mock-drand = ["rafi-engine/mock-drand"]
+
+[dev-dependencies]
+figment = { version = "0.10", features = ["env", "json", "toml", "test"] }

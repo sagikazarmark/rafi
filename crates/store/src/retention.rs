@@ -1,0 +1,383 @@
+//! Housekeeping's erasure writes: expiring raffles that were never frozen,
+//! erasing the entrants whose date has come, and purging raffles at the
+//! ceiling. Every write is set-based, one batch per duty, whatever the
+//! number of entrants: D1 limits the statements per invocation, and a batch
+//! is the only transaction it has. Each is idempotent: what is already
+//! erased, expired or purged matches nothing.
+
+use rafi_lifecycle::RaffleState;
+use rafi_raffle::Outcome;
+
+use crate::{Db, Result, audit::HOUSEKEEPING, entrants::ERASED, raffles::states};
+
+/// Housekeeping as the audit log's actor, in both columns ([`HOUSEKEEPING`]).
+const ACTOR: &str = HOUSEKEEPING.owner;
+
+/// The raffles due to expire at `?1`: never frozen, or frozen without a
+/// manifest ([`RaffleState::expires_with`]), past their erasure date, not
+/// yet purged.
+fn expiring() -> String {
+    format!(
+        "(state IN ({}) OR (state = '{}' AND manifest IS NULL)) AND erase_at <= ?1 AND purged_at IS NULL",
+        states(RaffleState::expires),
+        RaffleState::Frozen.as_str()
+    )
+}
+
+/// Expires every raffle that was never frozen (or frozen without a manifest)
+/// and whose erasure date has passed at `now`: its entrants are deleted
+/// outright (there is no manifest to keep verifiable), and so are the people
+/// removed from it at their request (`add_removals`), an audit row counts
+/// the entrants, and the raffle becomes purged with its live updates ended.
+/// Returns the raffles expired.
+pub async fn expire_due(db: &Db, now: i64) -> Result<Vec<String>> {
+    let due = expiring();
+    let ids: Vec<(String,)> = db
+        .query(format!("SELECT id FROM raffles WHERE {due}"))
+        .bind(now)
+        .all()
+        .await?;
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    db.batch(vec![
+        db.query(format!(
+            "INSERT INTO audit (raffle_id, at, actor, user_id, action, detail)
+             SELECT id, ?1, '{ACTOR}', '{ACTOR}', '{expire}',
+                    CAST((SELECT COUNT(*) FROM entrants WHERE raffle_id = raffles.id) AS TEXT)
+             FROM raffles WHERE {due}",
+            expire = crate::audit::Action::Expire.as_str()
+        ))
+        .bind(now),
+        db.query(format!(
+            "DELETE FROM entrants WHERE raffle_id IN (SELECT id FROM raffles WHERE {due})"
+        ))
+        .bind(now),
+        db.query(format!(
+            "DELETE FROM add_removals WHERE raffle_id IN (SELECT id FROM raffles WHERE {due})"
+        ))
+        .bind(now),
+        db.query(format!(
+            "UPDATE raffles SET state = '{purged}', purged_at = ?1, updated_at = ?1,
+                    live_ended_at = COALESCE(live_ended_at, ?1)
+             WHERE {due}",
+            purged = RaffleState::Purged.as_str(),
+        ))
+        .bind(now),
+    ])
+    .await?;
+    Ok(ids.into_iter().map(|(id,)| id).collect())
+}
+
+/// The entrants due for erasure at `?1`, with a winner hold of `?2` seconds:
+/// not erased, in a frozen (or later) raffle past its erasure date, and
+/// either not a winner (the entrant of a claimed draw), or a winner whose
+/// prize was delivered, or anyone once the hold has passed too.
+///
+/// It starts from the entrants not erased yet (`entrants_unerased`), and
+/// reaches each one's raffle by its key: the hourly run reads what is left
+/// to erase, not every raffle past its erasure date and all of their
+/// entrants, erased or not, which grow with the installation (the
+/// `EXPLAIN QUERY PLAN` gate holds it, `query_plans`). Purged raffles stay
+/// in the set on purpose: a restored backup can bring their entrants back.
+fn due() -> String {
+    format!(
+        "entrants.erased = 0 AND EXISTS (
+            SELECT 1 FROM raffles r
+            WHERE r.id = entrants.raffle_id
+              AND r.state IN ({frozen}) AND r.erase_at <= ?1
+              AND (entrants.delivered_at IS NOT NULL
+                   OR r.erase_at <= ?1 - ?2
+                   OR entrants.id NOT IN (
+                       SELECT entrant_id FROM draws WHERE raffle_id = r.id AND outcome = '{claimed}')))",
+        frozen = states(RaffleState::frozen_or_later),
+        claimed = Outcome::Claimed.as_str(),
+    )
+}
+
+/// The finished raffles due to be purged at `?1` with a hold of `?2`: the
+/// ceiling has passed. A frozen or drawing raffle is erased but not moved:
+/// the engine owns its state.
+fn at_ceiling() -> String {
+    format!(
+        "state = '{finished}' AND purged_at IS NULL AND erase_at <= ?1 - ?2",
+        finished = RaffleState::Finished.as_str(),
+    )
+}
+
+/// What [`erase_due`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Erased {
+    /// Entrants whose personal data was erased.
+    pub entrants: u64,
+    /// The raffles they were in.
+    pub raffles: Vec<String>,
+    /// The finished raffles that became purged: the ceiling passed.
+    pub purged: Vec<String>,
+}
+
+/// Erases every entrant due at `now` (winners held `winner_hold_secs` past
+/// the erasure date unless delivered), logs each erasure, writes one audit
+/// row per raffle with the count, and purges finished raffles at the
+/// ceiling: one batch, all or nothing.
+pub async fn erase_due(db: &Db, now: i64, winner_hold_secs: i64) -> Result<Erased> {
+    let (due, ceiling) = (due(), at_ceiling());
+    let (count,): (i64,) = db
+        .query(format!("SELECT COUNT(*) FROM entrants WHERE {due}"))
+        .bind(now)
+        .bind(winner_hold_secs)
+        .one()
+        .await?;
+    let raffles: Vec<(String,)> = db
+        .query(format!(
+            "SELECT DISTINCT raffle_id FROM entrants WHERE {due} ORDER BY raffle_id"
+        ))
+        .bind(now)
+        .bind(winner_hold_secs)
+        .all()
+        .await?;
+    // Sorted here: `ORDER BY id` would have the planner walk every raffle
+    // by its key rather than search `raffles_erase_at`.
+    let mut purged: Vec<(String,)> = db
+        .query(format!("SELECT id FROM raffles WHERE {ceiling}"))
+        .bind(now)
+        .bind(winner_hold_secs)
+        .all()
+        .await?;
+    purged.sort();
+    if count == 0 && purged.is_empty() {
+        return Ok(Erased::default());
+    }
+    db.batch(vec![
+        db.query(format!(
+            "INSERT INTO audit (raffle_id, at, actor, user_id, action, detail)
+             SELECT raffle_id, ?1, '{ACTOR}', '{ACTOR}', '{auto_erase}', CAST(COUNT(*) AS TEXT)
+             FROM entrants WHERE {due} GROUP BY raffle_id",
+            auto_erase = crate::audit::Action::AutoErase.as_str()
+        ))
+        .bind(now)
+        .bind(winner_hold_secs),
+        db.query(format!(
+            "INSERT INTO erasures (raffle_id, entrant_id, at)
+             SELECT raffle_id, id, ?1 FROM entrants WHERE {due}"
+        ))
+        .bind(now)
+        .bind(winner_hold_secs),
+        db.query(format!("UPDATE entrants SET {ERASED} WHERE {due}"))
+            .bind(now)
+            .bind(winner_hold_secs),
+        db.query(format!(
+            "INSERT INTO audit (raffle_id, at, actor, user_id, action, detail)
+             SELECT id, ?1, '{ACTOR}', '{ACTOR}', '{auto_purge}', '' FROM raffles WHERE {ceiling}",
+            auto_purge = crate::audit::Action::AutoPurge.as_str()
+        ))
+        .bind(now)
+        .bind(winner_hold_secs),
+        db.query(format!(
+            "UPDATE raffles SET state = '{purged}', purged_at = ?1, updated_at = ?1,
+                    live_ended_at = COALESCE(live_ended_at, ?1)
+             WHERE {ceiling}",
+            purged = RaffleState::Purged.as_str(),
+        ))
+        .bind(now)
+        .bind(winner_hold_secs),
+    ])
+    .await?;
+    Ok(Erased {
+        entrants: count.max(0) as u64,
+        raffles: raffles.into_iter().map(|(id,)| id).collect(),
+        purged: purged.into_iter().map(|(id,)| id).collect(),
+    })
+}
+
+/// The entrants who took themselves off ([`entrants::object`](crate::entrants::object))
+/// of a raffle that is over, not erased yet: due at once, not on the
+/// erasure date. Purged raffles stay in the set, as in [`due`]: a restored
+/// backup can bring their entrants back.
+///
+/// Not a winner who claimed a prize: the objection and the claim can both
+/// land (pressed within the engine's round trip, the objection checks a
+/// claim the engine hasn't stored yet), and a claimed prize may still be
+/// owed to them. They are on the winners' clock ([`due`]) instead.
+fn objected_due() -> String {
+    format!(
+        "entrants.erased = 0 AND entrants.objected_at IS NOT NULL
+         AND EXISTS (SELECT 1 FROM raffles r WHERE r.id = entrants.raffle_id AND r.state IN ({over}))
+         AND NOT EXISTS (SELECT 1 FROM draws
+                         WHERE draws.raffle_id = entrants.raffle_id
+                           AND draws.entrant_id = entrants.id AND draws.outcome = '{claimed}')",
+        over = states(RaffleState::is_over),
+        claimed = Outcome::Claimed.as_str(),
+    )
+}
+
+/// Erases, at `now`, every entrant who took themselves off a raffle that is
+/// over: what they were told is that their data goes when the raffle does,
+/// not on the date everyone else's does. Each erasure is logged, and each
+/// raffle gets an audit row `auto_erase` whose detail counts them as
+/// objected (`2 objected`); one batch, all or nothing, idempotent. Nobody
+/// is purged ([`Erased::purged`] is empty).
+pub async fn erase_objected(db: &Db, now: i64) -> Result<Erased> {
+    let due = objected_due();
+    let raffles: Vec<(String, i64)> = db
+        .query(format!(
+            "SELECT raffle_id, COUNT(*) FROM entrants WHERE {due} GROUP BY raffle_id ORDER BY raffle_id"
+        ))
+        .all()
+        .await?;
+    if raffles.is_empty() {
+        return Ok(Erased::default());
+    }
+    db.batch(vec![
+        db.query(format!(
+            "INSERT INTO audit (raffle_id, at, actor, user_id, action, detail)
+             SELECT raffle_id, ?1, '{ACTOR}', '{ACTOR}', '{auto_erase}', CAST(COUNT(*) AS TEXT) || ' objected'
+             FROM entrants WHERE {due} GROUP BY raffle_id",
+            auto_erase = crate::audit::Action::AutoErase.as_str()
+        ))
+        .bind(now),
+        db.query(format!(
+            "INSERT INTO erasures (raffle_id, entrant_id, at)
+             SELECT raffle_id, id, ?1 FROM entrants WHERE {due}"
+        ))
+        .bind(now),
+        db.query(format!("UPDATE entrants SET {ERASED} WHERE {due}")),
+    ])
+    .await?;
+    Ok(Erased {
+        entrants: raffles.iter().map(|(_, n)| n.max(&0).unsigned_abs()).sum(),
+        raffles: raffles.into_iter().map(|(id, _)| id).collect(),
+        purged: Vec::new(),
+    })
+}
+
+/// The raffles whose removals at their request (`add_removals`) serve
+/// nothing at `?1`: no add will come, since the list is frozen for good
+/// (a manifest), the raffle is purged, or its erasure date has passed.
+/// From the removals (few: only raffles still taking adds keep theirs) to
+/// each one's raffle by its key, not from every raffle.
+const REMOVALS_DONE: &str = "EXISTS (SELECT 1 FROM raffles r WHERE r.id = add_removals.raffle_id
+    AND (r.manifest IS NOT NULL OR r.purged_at IS NOT NULL OR r.erase_at <= ?1))";
+
+/// Forgets, at `now`, who was removed at their request from every raffle
+/// that can't take an add any more: its list frozen for good (a manifest),
+/// purged, or past its erasure date. The freeze and the
+/// expiry forget them as they happen; this is the sweep that keeps it so
+/// whatever happened in between, a restored backup included. Returns how
+/// many rows went (counted in the same transaction as the delete).
+pub async fn forget_removals(db: &Db, now: i64) -> Result<u64> {
+    let mut sets = db
+        .batch_rows(vec![
+            db.query(format!(
+                "SELECT COUNT(*) FROM add_removals WHERE {REMOVALS_DONE}"
+            ))
+            .bind(now),
+            db.query(format!("DELETE FROM add_removals WHERE {REMOVALS_DONE}"))
+                .bind(now),
+        ])
+        .await?
+        .into_iter();
+    let count = match sets.next().and_then(|rows| rows.into_iter().next()) {
+        Some(row) => row.decode::<(i64,)>()?.0,
+        None => 0,
+    };
+    Ok(count.max(0).unsigned_abs())
+}
+
+/// Purges a frozen or drawing raffle the engine doesn't hold any more (it
+/// refused to finish it as not open): past the ceiling everyone is erased,
+/// and the log in the database is the record; nothing is left to wait for.
+/// Audited as `auto_purge`.
+pub async fn purge_unfinished(db: &Db, id: &str, now: i64) -> Result<()> {
+    db.batch(vec![
+        db.query(format!(
+            "INSERT INTO audit (raffle_id, at, actor, user_id, action, detail)
+             SELECT id, ?2, '{ACTOR}', '{ACTOR}', '{auto_purge}', 'unfinished' FROM raffles
+             WHERE id = ?1 AND state IN ({drawable})",
+            auto_purge = crate::audit::Action::AutoPurge.as_str(),
+            drawable = states(RaffleState::drawable),
+        ))
+        .bind(id)
+        .bind(now),
+        db.query(format!(
+            "UPDATE raffles SET state = '{purged}', purged_at = COALESCE(purged_at, ?2), updated_at = ?2,
+                    live_ended_at = COALESCE(live_ended_at, ?2)
+             WHERE id = ?1 AND state IN ({drawable})",
+            purged = RaffleState::Purged.as_str(),
+            drawable = states(RaffleState::drawable),
+        ))
+        .bind(id)
+        .bind(now),
+    ])
+    .await?;
+    Ok(())
+}
+
+/// The frozen or drawing raffles past the ceiling at `now`: never finished,
+/// everyone erased. Housekeeping asks the engine to finish them, best effort,
+/// a few per run: they come in ID order starting after `after` (the last one
+/// asked about) and wrapping around, so raffles the engine keeps refusing
+/// don't starve the rest.
+pub async fn unfinished_at_ceiling(
+    db: &Db,
+    now: i64,
+    winner_hold_secs: i64,
+    after: Option<&str>,
+) -> Result<Vec<String>> {
+    let ids: Vec<(String,)> = db
+        .query(format!(
+            "SELECT id FROM raffles WHERE state IN ({}) AND purged_at IS NULL AND erase_at <= ?1 - ?2
+             ORDER BY CASE WHEN id > ?3 THEN 0 ELSE 1 END, id",
+            states(RaffleState::drawable)
+        ))
+        .bind(now)
+        .bind(winner_hold_secs)
+        .bind(after.unwrap_or(""))
+        .all()
+        .await?;
+    Ok(ids.into_iter().map(|(id,)| id).collect())
+}
+
+/// Re-applies the purge to every raffle that was purged (or whose organizer
+/// left) but has personal data again (a restored backup): the restore
+/// tool's write. Such a raffle has, by definition, nobody un-erased, so every
+/// entrant of its with personal data is erased again and logged, whether or
+/// not the backup carried the `erasures` rows, and a raffle that lost its
+/// `Purged` state gets it back. Returns `(entrants erased, raffles purged
+/// again)`.
+pub async fn reapply_purges(db: &Db, now: i64) -> Result<(u64, u64)> {
+    let purged_raffle = "EXISTS (SELECT 1 FROM raffles r WHERE r.id = entrants.raffle_id
+                                   AND (r.purged_at IS NOT NULL OR r.organizer_left_at IS NOT NULL))";
+    let unpurged = format!(
+        "purged_at IS NOT NULL AND state <> '{}'",
+        RaffleState::Purged.as_str()
+    );
+    let (entrants,): (i64,) = db
+        .query(format!(
+            "SELECT COUNT(*) FROM entrants WHERE erased = 0 AND {purged_raffle}"
+        ))
+        .one()
+        .await?;
+    let (raffles,): (i64,) = db
+        .query(format!("SELECT COUNT(*) FROM raffles WHERE {unpurged}"))
+        .one()
+        .await?;
+    db.batch(vec![
+        db.query(format!(
+            "INSERT INTO erasures (raffle_id, entrant_id, at)
+             SELECT raffle_id, id, ?1 FROM entrants
+             WHERE erased = 0 AND {purged_raffle}
+               AND NOT EXISTS (SELECT 1 FROM erasures e WHERE e.raffle_id = entrants.raffle_id AND e.entrant_id = entrants.id)"
+        ))
+        .bind(now),
+        db.query(format!(
+            "UPDATE entrants SET {ERASED} WHERE erased = 0 AND {purged_raffle}"
+        )),
+        db.query(format!(
+            "UPDATE raffles SET state = '{}' WHERE {unpurged}",
+            RaffleState::Purged.as_str()
+        )),
+    ])
+    .await?;
+    Ok((entrants.max(0) as u64, raffles.max(0) as u64))
+}

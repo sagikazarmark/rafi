@@ -1,0 +1,349 @@
+-- Rafi schema for SQLite and D1. Times are unix seconds unless noted.
+-- Frozen with the first release (v0.1.0): databases exist with it, so a
+-- change is a new migration, 0002_* onward, never an edit here (sqlx checks
+-- each applied file's checksum). migrations/postgres changes with it, and
+-- crates/store/tests/schemas.rs holds the two together.
+
+CREATE TABLE raffles (
+    id TEXT PRIMARY KEY NOT NULL,
+    owner_id TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    join_code TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    organizer_name TEXT NOT NULL DEFAULT '',
+    contact_email TEXT NOT NULL DEFAULT '',
+    -- The organizer's privacy contact (falls back to contact_email), and their
+    -- own privacy text or notice, shown after the generated notice.
+    privacy_email TEXT NOT NULL DEFAULT '',
+    privacy_text TEXT NOT NULL DEFAULT '',
+    privacy_url TEXT NOT NULL DEFAULT '',
+    rules TEXT NOT NULL DEFAULT '',
+    -- The event date as a calendar day (YYYY-MM-DD, for display), the instant
+    -- that day ends, and the retention period. Both are written by the
+    -- settings write only, and lock with the rules once a real entrant has
+    -- joined, so the erasure date shown to entrants never moves afterwards.
+    -- The erasure date itself is the database's: event_ends_at plus the
+    -- period, recomputed whenever either changes, so nothing can write it
+    -- inconsistently.
+    event_date TEXT NOT NULL,
+    event_ends_at INTEGER NOT NULL,
+    retention_days INTEGER NOT NULL,
+    erase_at INTEGER NOT NULL GENERATED ALWAYS AS (event_ends_at + retention_days * 86400) STORED,
+    state TEXT NOT NULL DEFAULT 'draft',
+    test_mode INTEGER NOT NULL DEFAULT 0,
+    -- Whether people may join with the QR code (registration). Off, the raffle
+    -- has no Open or Closed: it freezes from Published, and its entrants are
+    -- the people the organizer added. Switched before the freeze, but not
+    -- while registration is open; guarded in SQL like test_mode.
+    registration INTEGER NOT NULL DEFAULT 1,
+    -- The raffle's manifest: the frozen entrant list (canonical JSON, exactly
+    -- as hashed), and its hash.
+    manifest TEXT,
+    manifest_hash TEXT,
+    frozen_at INTEGER,
+    -- Set when the engine first wrote the raffle: opening records no event, so
+    -- an opened raffle may have none.
+    opened_at INTEGER,
+    finished_at INTEGER,
+    -- Set when the organizer ends live updates; the live channel is gone after it.
+    live_ended_at INTEGER,
+    purged_at INTEGER,
+    -- Set when the owner removed their data: the organizer's name and
+    -- contacts are gone for good, and the notice says so.
+    organizer_left_at INTEGER,
+    -- The raffle's version: bumped by every write that can change what screens
+    -- or phones show (the triggers below). Live views carry it, so clients and
+    -- the live channel can order them without a process-wide counter.
+    version INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- The admin's list: an owner's raffles, newest first, with the ID as the
+-- tiebreak so the order is the same on every backend.
+CREATE INDEX raffles_owner ON raffles (owner_id, created_at, id);
+
+-- Housekeeping finds what is due to be erased by this.
+CREATE INDEX raffles_erase_at ON raffles (erase_at) WHERE purged_at IS NULL;
+
+-- The raffles whose live updates haven't ended, by when they finished:
+-- ending the channels (housekeeping::live_channels_due) starts here, not
+-- from every raffle the installation ever had.
+CREATE INDEX raffles_live ON raffles (finished_at) WHERE live_ended_at IS NULL;
+
+-- A prize's ID is a random 128-bit hex string, like a raffle's: the raffle's
+-- items in the manifest are `<prize id>-<n>`, one per copy.
+CREATE TABLE prizes (
+    id TEXT PRIMARY KEY NOT NULL,
+    raffle_id TEXT NOT NULL REFERENCES raffles (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    sponsor TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    qty INTEGER NOT NULL DEFAULT 1,
+    position INTEGER NOT NULL DEFAULT 0,
+    -- How the prize reaches its winner, rafi_lifecycle::prize::Delivery's
+    -- name: `later` (the organizer marks it delivered) or `on_the_spot`
+    -- (claiming it delivers it). Changes until the raffle is over; it isn't
+    -- in the manifest.
+    delivery TEXT NOT NULL DEFAULT 'later'
+);
+
+CREATE INDEX prizes_raffle ON prizes (raffle_id, position);
+
+CREATE TABLE entrants (
+    -- Public, random 128-bit hex ID (appears in the published entrant list).
+    id TEXT PRIMARY KEY NOT NULL,
+    raffle_id TEXT NOT NULL REFERENCES raffles (id) ON DELETE CASCADE,
+    display_name TEXT NOT NULL,
+    email_raw TEXT,
+    email_norm TEXT,
+    source TEXT NOT NULL DEFAULT 'self',
+    hidden INTEGER NOT NULL DEFAULT 0,
+    -- Private code shown only to the entrant and the organizer; NULL once
+    -- their personal data is erased.
+    claim_code TEXT,
+    -- SHA-256 of the secret token in the entrant's cookie.
+    token_hash TEXT,
+    -- What the join form showed when the rules were accepted:
+    -- `<form version>/age<minimum age>`, e.g. `2026-11-01/age16`; the form
+    -- version is rafi_app::CONSENT_VERSION, bumped whenever its text changes.
+    -- Both NULL for whoever saw no join form: people the organizer added,
+    -- and fakes.
+    consent_version TEXT,
+    consent_rules_at INTEGER,
+    delivered_at INTEGER,
+    erased INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    -- The organizer's add this entrant came in with (a random ID the browser
+    -- made: the unit of retrying and undoing an add), and for a list its
+    -- row, which keeps the list's order among entrants added at one time.
+    -- NULL for joins and fakes (and the row for one person). Nothing
+    -- personal.
+    batch_id TEXT,
+    batch_row INTEGER,
+    -- The entrant's ID in the organizer's registration system, if their add
+    -- gave one: it matches them on a later add. Admin only; erased with the
+    -- rest of their personal data.
+    list_ref TEXT,
+    -- When someone the organizer added took themselves off after the freeze
+    -- (they object, and accepted no rules): their name is hidden, they can
+    -- only be declined if drawn, and their personal data is erased once the
+    -- raffle is over. The anonymous ID stays in the manifest. NULL otherwise.
+    objected_at INTEGER,
+    UNIQUE (raffle_id, email_norm),
+    UNIQUE (raffle_id, list_ref)
+);
+
+CREATE INDEX entrants_raffle ON entrants (raffle_id, created_at);
+CREATE INDEX entrants_token ON entrants (token_hash);
+-- Finding an add's entrants: a retry, an undo, the add's own guard.
+CREATE INDEX entrants_batch ON entrants (raffle_id, batch_id) WHERE batch_id IS NOT NULL;
+-- The entrants whose personal data isn't erased yet, whatever the
+-- installation's age: the erasures (retention::erase_due, erase_objected)
+-- start here.
+CREATE INDEX entrants_unerased ON entrants (raffle_id) WHERE erased = 0;
+
+-- One row while an add is being written, keyed `add:<raffle id>`: the add's
+-- batch inserts it only if the raffle takes the whole add (its state, the
+-- entrant cap, a batch ID not used yet), inserts its rows only if it is
+-- there, and deletes it, so the table is empty outside a batch. One decision
+-- makes the add all or nothing, and two adds into one raffle serialize on
+-- the key. No trigger may touch it: its change count is the decision.
+CREATE TABLE batch_guards (
+    key TEXT PRIMARY KEY NOT NULL
+);
+
+-- Entrants removed before the freeze at their own request, by the keys a
+-- later add matches people with (the email key, the registration ID; one row
+-- may hold both): such an add leaves them out unless the organizer lifts the
+-- removal for that row, which deletes it. Personal data (an email key in
+-- clear, as in `entrants`: a hash without a secret would hide nothing), kept
+-- only while the raffle can still take an add: deleted when its list is
+-- frozen for good (the manifest is written), when it expires, is purged or
+-- is deleted, and by housekeeping for any raffle past that.
+CREATE TABLE add_removals (
+    raffle_id TEXT NOT NULL REFERENCES raffles (id) ON DELETE CASCADE,
+    email_norm TEXT,
+    list_ref TEXT,
+    removed_at INTEGER NOT NULL,
+    UNIQUE (raffle_id, email_norm),
+    UNIQUE (raffle_id, list_ref),
+    CHECK (email_norm IS NOT NULL OR list_ref IS NOT NULL)
+);
+
+-- What each add of the organizer's did (`rafi_api::AddResult` as JSON: its
+-- rows by index, added with their entrant IDs or skipped with the reason; no
+-- personal data), by the batch ID the browser made for it: a retry with the
+-- same ID is answered with it and adds nothing, after an undo too (the undo
+-- deletes the entrants, not the receipt). Kept while the list can still take
+-- an add: deleted with the manifest's write, and with the raffle.
+CREATE TABLE add_batches (
+    raffle_id TEXT NOT NULL REFERENCES raffles (id) ON DELETE CASCADE,
+    batch_id TEXT NOT NULL,
+    result TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (raffle_id, batch_id)
+);
+
+-- A write that already moves the version (`SET version = ...`) is left alone,
+-- which also stops the bump from triggering itself.
+CREATE TRIGGER raffles_version AFTER UPDATE ON raffles
+WHEN NEW.version = OLD.version
+BEGIN
+    UPDATE raffles SET version = OLD.version + 1 WHERE id = NEW.id;
+END;
+
+-- Inserting, updating or deleting a prize or an entrant bumps its raffle.
+CREATE TRIGGER prizes_version_insert AFTER INSERT ON prizes
+BEGIN
+    UPDATE raffles SET version = version + 1 WHERE id = NEW.raffle_id;
+END;
+
+CREATE TRIGGER prizes_version_update AFTER UPDATE ON prizes
+BEGIN
+    UPDATE raffles SET version = version + 1 WHERE id = NEW.raffle_id;
+END;
+
+CREATE TRIGGER prizes_version_delete AFTER DELETE ON prizes
+BEGIN
+    UPDATE raffles SET version = version + 1 WHERE id = OLD.raffle_id;
+END;
+
+CREATE TRIGGER entrants_version_insert AFTER INSERT ON entrants
+BEGIN
+    UPDATE raffles SET version = version + 1 WHERE id = NEW.raffle_id;
+END;
+
+CREATE TRIGGER entrants_version_update AFTER UPDATE ON entrants
+BEGIN
+    UPDATE raffles SET version = version + 1 WHERE id = NEW.raffle_id;
+END;
+
+CREATE TRIGGER entrants_version_delete AFTER DELETE ON entrants
+BEGIN
+    UPDATE raffles SET version = version + 1 WHERE id = OLD.raffle_id;
+END;
+
+-- The raffle's event log: append-only, one row per event, in the order the
+-- raffle recorded them.
+CREATE TABLE raffle_events (
+    raffle_id TEXT NOT NULL REFERENCES raffles (id) ON DELETE CASCADE,
+    -- The event's position in the log, from 1: the domain's, never the database's.
+    seq INTEGER NOT NULL CHECK (seq >= 1),
+    -- The event's type, as in its body.
+    type TEXT NOT NULL,
+    -- The event as published (serde JSON of rafi_raffle::Event).
+    body TEXT NOT NULL,
+    -- When it was stored (unix seconds); not part of the published event.
+    recorded_at INTEGER NOT NULL,
+    PRIMARY KEY (raffle_id, seq)
+);
+
+-- Events are never updated. A migration that renames events (rewriting `type`
+-- and `body`) must drop and recreate this trigger around the rewrite.
+CREATE TRIGGER raffle_events_no_update BEFORE UPDATE ON raffle_events
+BEGIN
+    SELECT RAISE(ABORT, 'raffle events are append-only');
+END;
+
+-- Deleting the raffle takes its events with it.
+CREATE TRIGGER raffle_events_no_delete BEFORE DELETE ON raffle_events
+WHEN EXISTS (SELECT 1 FROM raffles WHERE id = OLD.raffle_id)
+BEGIN
+    SELECT RAISE(ABORT, 'raffle events are append-only');
+END;
+
+-- A retried or stale event (seq already stored) passes, and the primary key
+-- ignores it; only a gap is refused.
+CREATE TRIGGER raffle_events_contiguous BEFORE INSERT ON raffle_events
+WHEN NEW.seq > (SELECT COALESCE(MAX(seq), 0) FROM raffle_events WHERE raffle_id = NEW.raffle_id) + 1
+BEGIN
+    SELECT RAISE(ABORT, 'raffle events must be contiguous');
+END;
+
+-- Every completed draw and where its winner stands, as Raffle::draws() says.
+CREATE TABLE draws (
+    raffle_id TEXT NOT NULL REFERENCES raffles (id) ON DELETE CASCADE,
+    k INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    entrant_id TEXT NOT NULL,
+    -- rafi_raffle::Outcome::as_str(): the code writes only those, so the
+    -- schema doesn't list them.
+    outcome TEXT NOT NULL,
+    -- How its prize reached the winner, as the prize said when the draw was
+    -- claimed (rafi_lifecycle::prize::Delivery::as_str()); NULL until then.
+    -- A later change to the prize's delivery is for the claims after it: an
+    -- earlier claim keeps what it meant (sent later stays owed).
+    delivery TEXT,
+    PRIMARY KEY (raffle_id, k)
+);
+
+-- Who did what to a raffle. `actor` is the owner key the raffle belongs to
+-- (a Clerk organization, or else the user), `user_id` the user acting for it
+-- (the same for a personal account; housekeeping writes `housekeeping` in
+-- both). Kept after the owner's data is removed, as the operator's record;
+-- `detail` never holds personal data (counts, IDs, a title). `action` is
+-- rafi_store::audit::Action::as_str(): one of its fixed strings (`create`,
+-- `settings`, `freeze`, `draw`, `resolve`, `deliver`, `auto_erase`, ...), or
+-- the state a lifecycle move went to (`ready`, `open`, `closed`, `draft`).
+CREATE TABLE audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    raffle_id TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    actor TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX audit_raffle ON audit (raffle_id, id);
+
+-- Every erasure of an entrant's personal data, without any personal data, so
+-- a database restore (D1 Time Travel) can re-apply them.
+CREATE TABLE erasures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    raffle_id TEXT NOT NULL,
+    entrant_id TEXT NOT NULL,
+    at INTEGER NOT NULL
+);
+-- Re-applying them after a restore, and housekeeping's sweeps, look an
+-- entrant up here.
+CREATE INDEX erasures_entrant ON erasures (raffle_id, entrant_id);
+
+-- Proof-of-work challenges already used to join. A replayed solution fails the
+-- primary key. Expired rows are deleted by the scheduled job.
+CREATE TABLE pow_used (
+    challenge TEXT PRIMARY KEY NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX pow_used_expiry ON pow_used (expires_at);
+
+-- What an owner's new raffles start with: who organizes them (the data
+-- controller), their privacy contact and text, their additional rules,
+-- their retention period (NULL: the installation's default) and whether
+-- people join with the QR code. Copied into each
+-- raffle as it is created, so a later change leaves existing raffles as they
+-- are.
+CREATE TABLE owner_defaults (
+    owner_id TEXT PRIMARY KEY NOT NULL,
+    organizer_name TEXT NOT NULL DEFAULT '',
+    contact_email TEXT NOT NULL DEFAULT '',
+    privacy_email TEXT NOT NULL DEFAULT '',
+    privacy_text TEXT NOT NULL DEFAULT '',
+    privacy_url TEXT NOT NULL DEFAULT '',
+    rules TEXT NOT NULL DEFAULT '',
+    retention_days INTEGER,
+    registration INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL
+);
+
+-- Small operational facts: when housekeeping last succeeded
+-- (`last_retention_ok_at`, unix seconds as text), and the last raffle it
+-- asked the engine to finish at the ceiling (`last_ceiling_finish`, its ID),
+-- where the next run starts.
+CREATE TABLE meta (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);

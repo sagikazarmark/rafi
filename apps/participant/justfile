@@ -1,0 +1,17 @@
+set default-list
+set ignore-comments
+
+buildDir := "build"
+
+build out=buildDir:
+    rm -rf {{ out }}/public/assets
+
+    dx bundle --platform web --release --locked --debug-symbols false --inject-loading-scripts false --out-dir {{ out }}
+
+    # dx's pre_compress (Dioxus.toml) writes brotli for the hashed assets only:
+    # add gzip for them, and both for fallback.js, which dx copies as it is.
+    gzip -9 -k -n -f {{ out }}/public/assets/*.js {{ out }}/public/assets/*.wasm {{ out }}/public/fallback.js
+    brotli -9 -k -f {{ out }}/public/fallback.js
+
+clean:
+    rm -rf {{ buildDir }}

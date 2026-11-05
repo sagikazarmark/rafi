@@ -1,0 +1,697 @@
+# Cloudflare Workers
+
+Rafi on Cloudflare Workers: three Workers and one D1 database, with Restate Cloud running the raffle engine's
+invocations and Clerk signing organizers in. This is the production deployment. An installation is a repository of
+the operator's, created from the deploy template; its GitHub Actions workflows deploy the Rafi release its `VERSION`
+names (or several installations in one repository, as Wrangler environments: [Several
+installations](#several-installations)). The template repository, `sagikazarmark/rafi-deploy-template`, is in the
+works: it will carry the first deploy, step by step (its INSTALL.md, which this page calls "INSTALL.md"), and the
+day-to-day running (upgrading, the run reports, the cleanup, rotating keys, logs: its README). This page is the
+reference behind both: what runs where, what the deploy does and why, the permissions it needs, and what to do
+when something goes wrong.
+
+Cloudflare Workers is one deployment, not an assumption of the code. The app and the engine are written against small
+interfaces (the engine's `Store` and `Observer`, the live `Notifier`, the app's `RateLimit`), and `rafi-cloudflare`
+implements them over Workers bindings.
+
+## The three Workers
+
+| | App | Engine | Live |
+|---|---|---|---|
+| Worker (the template's names) | `rafi-app` | `rafi-engine-v<version, dashed>` (`rafi-engine-v0-1-0`), one per release | `rafi-live` |
+| Built from | `apps/worker-app` | `apps/worker-engine` | `apps/worker-live` |
+| Configuration | `wrangler.app.toml` | `wrangler.engine.toml` (named `rafi-engine` there) | `wrangler.live.toml` |
+| Address | one: its workers.dev address, `https://<it>.<subdomain>.workers.dev` (the template's default), or a custom domain on your zone, workers.dev off ([below](#the-apps-address)); no preview URLs | `https://<it>.<subdomain>.workers.dev/restate` | none |
+| Serves | the web app and its API, the static files, phones' live-channel sockets (gated, then handed to the raffle's object), `/healthz`; 404 under `/restate` | the Restate endpoint (`Raffle`, `EngineInfo`) under `/restate`; 404 elsewhere | 404 to every request: its objects are reached through the bindings |
+| Bindings | `ASSETS`, `DB`, `RAFFLE_ROOM` (`script_name = "rafi-live"`), four rate limiters, Cron `0 * * * *` | `DB`, `RAFFLE_ROOM` (`script_name = "rafi-live"`) | `DB`, `RAFFLE_ROOM` (its own class `RaffleRoom`, migration `v1`) |
+| Vars | optionally `RAFI_DO_JURISDICTION` | `RESTATE_IDENTITY_KEYS`; optionally `RAFI_DO_JURISDICTION`, `RAFI_DRAND_RELAYS`, `RAFI_DRAND_LEAD_SECS`, `RAFI_DRAND_TIMEOUT_SECS` | optionally `RAFI_DO_JURISDICTION` |
+| Secrets | the installation's ([below](#the-app-workers-secrets)) | none | none |
+
+All three bind the one D1 database (the same `database_id`) and say the same `RAFI_DO_JURISDICTION` (unset by
+default, the plain namespace; `eu` keeps the objects in the EU: [Data residency](#data-residency)). The names are
+the template's; an installation may choose its own, and a second installation in the same account must
+([Several installations](#several-installations)). Every variable, and which Worker reads it, is in the
+[configuration reference](../reference/configuration.md#workers-only). Locally the three are one Worker,
+`apps/worker` (`rafi-worker`), with the engine under `/restate` and the class beside the app: see
+[Local development](#local-development).
+
+### Why the engine is a Worker per release
+
+Restate treats a deployment as immutable: it pins each invocation to the deployment it started on, sends new ones
+to the latest, and, re-registering a URI it knows, keeps the handlers it discovered there the first time
+([Upgrades](upgrades.md#registering-the-raffle-engine)). A draw sleeping until its drand round is an invocation in
+flight, and it must finish on the code that started it. So each release's engine is a Worker of its own at an
+address of its own, registered as a new deployment, and only ever running that release's code: a later deploy of
+the same release redeploys it with the same code (with `wrangler.engine.toml`'s vars as they are then), and a
+deploy of another release never touches it. The previous release's engine keeps serving what is pinned to it until
+Restate reports it drained; the [cleanup](#the-restate-cleanup) then removes it.
+
+While an older engine drains, it writes to the database the newer release migrated and nudges the live Worker's
+objects, so a release's migrations stay compatible with the previous release's engine, and its notes say so when
+they can't ([Releasing](../development/releasing.md#before-the-tag)).
+
+### Why the live Worker is separate
+
+The raffles' live channels are `RaffleRoom` Durable Objects, one per raffle, holding phones' sockets. Deploying the
+Worker that defines a Durable Object class restarts its objects, which drops every connection; and a new class or
+migration needs `wrangler deploy` (a version upload refuses a pending Durable Object migration). In a Worker of its
+own, the class is deployed only when its code or `wrangler.live.toml` changed (the deploy compares a
+fingerprint, below), so most releases keep every phone connected, and the app Worker, which has no class, is uploaded as a
+version and switched to only once the engine is registered.
+
+The objects' requests (`/nudge`, `/destroy`, the forwarded socket upgrade) are an interface between Workers
+deployed apart: a new live Worker accepts the previous app's and engine's requests, so a change to it takes two
+releases.
+
+### The engine on workers.dev
+
+The engine's address is public and its name predictable. That is fine because nothing reaches its handlers without
+Restate's signature: every request to `/restate/*` must carry a request identity signed by your Restate
+environment's private key, which the Restate SDK checks against `RESTATE_IDENTITY_KEYS` before any
+routing, discovery included; anything else is refused, and every other path is a 404. The engine holds no secrets
+(the identity keys are public keys, the drand settings vars), and it sees anonymous IDs only. Your zone's rules (WAF,
+Bot Fight Mode) don't apply to workers.dev, so none of them can challenge Restate's calls either. Its name is at
+most 63 characters (a DNS label), so the engine's name in `wrangler.engine.toml` leaves room for `-v<version>`.
+
+The address takes the account's **workers.dev subdomain**, `https://rafi-engine-v<version>.<subdomain>.workers.dev`.
+The dashboard's **Workers & Pages** shows it next to **Your subdomain**, and offers an account without one a
+subdomain on its first visit there. With the deploy token you can read it (`GET
+/accounts/{account_id}/workers/subdomain`, INSTALL.md's check) or register one (`PUT` to the same path with
+`{"subdomain": "<name>"}`). A deploy without one stops before deploying anything
+(`check-remote`, its first deploy step, reads it, as `deploy-engine` does), naming the dashboard page. Don't change it once deployed: Restate
+calls every registered engine at an address that contains it.
+
+### The app's address
+
+The app Worker has one address, the origin `RAFI_PUBLIC_URL` names: QR codes and links are made of it, and Rafi
+accepts a Clerk session only if it was made there (the token's `azp`, Clerk's authorized party). An installation
+chooses it before its first deploy (INSTALL.md's step 4):
+
+| | A. workers.dev (the template's default) | B. A custom domain |
+|---|---|---|
+| Address | `https://<app Worker's name>.<subdomain>.workers.dev` | a hostname on the installation's zone |
+| `wrangler.app.toml` | `workers_dev = true`, no `routes` | `workers_dev = false`, `routes = [{ pattern = "<hostname>", custom_domain = true }]` |
+| Token | Workers Scripts and D1 | and Workers Routes on the zone |
+| Clerk | a development instance (`pk_test_…`) | a production instance (`pk_live_…`) on the domain |
+| For | trying Rafi; small or private use | production |
+
+**Why A is the default**: the first deploy then needs no zone, no DNS, and no edit of `wrangler.app.toml` but the
+database ID; the token has two permissions; and Clerk's development instance, a Clerk application's default,
+needs nothing set up. B is two lines in `wrangler.app.toml`, a third permission, and Clerk's production
+instance with its DNS records. B states `workers_dev = false` rather than leaving it to wrangler (which infers
+`false` from routes when the key is absent): with workers.dev on beside the domain, the app would have a second
+address, where sign-in fails (the session's `azp` isn't `RAFI_PUBLIC_URL`) and the zone's rules don't apply. A
+Wrangler environment inherits both keys from the top level, so INSTALL.md's `[env.eu]` writes them out.
+`wrangler deploy` (a first install) and `wrangler triggers deploy` (`promote-app`) apply them: workers.dev on or
+off, and the custom domain when there is one; neither needs a route.
+
+**B's domain must be a Cloudflare zone** on the account: a Worker's custom domain needs "an active Cloudflare
+zone", and can't be on "a zone you do not own" ([Custom
+Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)). A domain whose DNS is
+elsewhere can hold Clerk's records, but can't serve the app, and a Clerk production instance on a domain the app
+isn't on doesn't sign anyone in to it: add the domain to Cloudflare, or stay on A.
+
+**What workers.dev exposes**: nothing the app doesn't already serve. It is public on either address, and like the
+engine on workers.dev ([above](#the-engine-on-workersdev)) it is outside any zone's rules (WAF, Bot Fight Mode,
+rate-limiting rules), which Rafi doesn't rely on: its rate limits, proof of work and entrant cap are in the Worker.
+The address shows the Worker's name and the account's subdomain to everyone who gets a link. `workers.dev` is on the
+[Public Suffix List](https://publicsuffix.org/list/public_suffix_list.dat) (Cloudflare's entry), so each account's
+`<subdomain>.workers.dev` is a site of its own, which the app shares with the account's other Workers, the engines
+among them. Cloudflare's own advice ([workers.dev](https://developers.cloudflare.com/workers/configuration/routing/workers-dev/)):
+"It's recommended to run production Workers on a Workers route or custom domain, rather than on your `workers.dev`
+subdomain. Your `workers.dev` subdomain is treated as a Free website and is intended for personal or hobby
+projects that aren't business-critical."
+
+**Clerk**, from its documentation:
+
+- A production instance needs "a domain you own" and "to be able to add DNS records on your domain" ([Deploy to
+  production](https://clerk.com/docs/guides/development/deployment/production)). Its sessions live in a cookie on
+  Clerk's Frontend API, a subdomain of yours (`clerk.example.org`), so the app and Clerk are the same site
+  ([Instances /
+  Environments](https://clerk.com/docs/guides/development/managing-environments#session-architecture-differences)).
+  workers.dev is neither yours nor open to your DNS records. Clerk says the same of other hosts' shared domains:
+  "It is currently not possible to use Clerk production API keys with your host's provided preview domain" (the
+  same page), and on Vercel, "you cannot use a `*.vercel.app` domain for production"
+  ([Vercel](https://clerk.com/docs/guides/development/deployment/vercel)).
+- A development instance works on any address. Clerk: "`Development` instances have a more relaxed security
+  posture and are not suitable for production workloads", and lists ([Instances /
+  Environments](https://clerk.com/docs/guides/development/managing-environments)): "Development instances are
+  capped at 100 users, and user data can not be transferred between instances"; its session is the "dev browser",
+  "transmitted via querystring (`__clerk_db_jwt`) rather than via cookie", which is "not secure enough for
+  production use"; email and SMS templates are prefixed with the environment type; some social connections use
+  shared credentials. Its prebuilt components show development-mode warnings
+  ([options](https://clerk.com/docs/js-frontend/guides/customizing-clerk/appearance-prop/options),
+  `unsafe_disableDevelopmentModeWarnings`), and clerk-js warns in the browser's console that "Development
+  instances have strict usage limits and should not be used when deploying your application to production". Clerk
+  delivers at most "20 SMS messages and 100 emails" a month from development instances, and emails 100 recipients
+  a day per workspace (50 in a workspace's first 7 days) ([Test emails and
+  phones](https://clerk.com/docs/guides/development/testing/test-emails-and-phones#monthly-limit)); its Backend
+  API allows development instances 100 requests per 10 seconds ([Rate
+  limits](https://clerk.com/docs/guides/how-clerk-works/system-limits)), and Rafi calls it only for the signing
+  keys, which it caches. The users are the organizers: entrants never sign in.
+- Rafi takes either: `CLERK_PUBLISHABLE_KEY` may be `pk_live_…` or `pk_test_…` (`rafi-server`'s config), the
+  Content-Security-Policy names the Frontend API host the key encodes (`<slug>.clerk.accounts.dev` for a
+  development instance, with Clerk's telemetry, which clerk-js sends from development instances only), and the
+  Worker verifies sessions against the signing keys Clerk's Backend API serves for the secret key's instance
+  (`https://api.clerk.com/v1/jwks`). Nothing in a release build refuses development keys.
+
+**Moving from A to B** later: links and QR codes already handed out name the old address, which `workers_dev =
+false` turns off; and the production instance has users of its own, so raffles, which belong to the Clerk user or
+organization that made them, stay with the development instance's accounts. Move before the first real event.
+
+## What an installation is
+
+Nothing of an installation's is compiled in: one build serves every installation. A release's one asset,
+`worker.tar.gz`, built by `.github/workflows/artifact.yaml` and attested by `.github/workflows/release.yaml`, holds `VERSION`, `app/` (the app Worker
+and its static files), `engine/`, `live/`, `migrations/` (the D1 migrations) and `deploy.sh`
+(`scripts/cloudflare-deploy.sh`), so a release deploys with its own logic ([Releasing](../development/releasing.md)).
+The installation is the operator's repository, created from the deploy template (a template repository, in the
+works; its configuration as a test fixture here: `testdata/cloudflare-installation`):
+
+- `VERSION`: the release it deploys (`VERSION.<environment>` for an installation that is a Wrangler environment,
+  when that file exists);
+- `wrangler.app.toml`, `wrangler.engine.toml`, `wrangler.live.toml`: the three Workers' shapes as this repository
+  ships them (`apps/worker-app/wrangler.toml` and the others; `scripts/workers-check.sh` checks they agree),
+  pointed at `release/`, with the operator's database ID, the app's address (workers.dev, or a custom domain) and
+  Restate public key;
+- `legal/terms.md` and `legal/privacy.md`, the operator's documents if they provide them (either or both), which
+  the deploy copies into the app's static files;
+- `package.json` (wrangler and the Restate CLI, `"wrangler": "^4"` and `"@restatedev/restate": "^1"`) and
+  `package-lock.json`, which pins them (the template's pins the wrangler the release was rehearsed with): the
+  workflows install from it with `npm ci` and `deploy.sh` runs them with `npx -y`, which takes the installed ones;
+- `.dev.vars.example`: the app Worker's secrets, filled in as `.dev.vars` and set on the Worker once
+  (`wrangler secret bulk .dev.vars`), never committed (`.dev.vars` is git-ignored, as are `release/` and
+  `node_modules/`; wrangler also reads `.dev.vars` for `wrangler dev`, which an installation doesn't run);
+- `.github/workflows/deploy.yaml` and `restate-cleanup.yaml`;
+- `INSTALL.md` (the first deploy) and `README.md` (the rest).
+
+**The installation is its app Worker's name**, as wrangler's dry run of `wrangler.app.toml` reports it. Unique
+in the account, it is the `instance` in the metadata each engine is registered with in Restate (`app` `rafi`,
+`instance`, `version`, `cloudflare_account`, `worker`), and the downgrade check and the cleanup act only on
+deployments whose metadata names this instance and this account.
+
+`deploy.sh` doesn't parse the configurations, and checks nothing of the installation's. The version it deploys is
+the release's own `VERSION` (the engine Worker's name and Restate's metadata are made of it): nothing compares it
+with the installation's version file, which only tells the workflows which release to download. Nothing checks
+that the release or the installation has its files (a missing one fails where wrangler meets it), and nothing looks
+for the template's placeholders (the zero `database_id` fails at the migrations; the `publickeyv1_…` key deploys
+an engine that refuses Restate, so its registration fails). It reads the Workers' names from wrangler itself:
+`wrangler deploy --dry-run -c <file>` of each, for the Wrangler environment `CLOUDFLARE_ENV` names (unset or empty:
+the top level), with `WRANGLER_OUTPUT_FILE_PATH`, whose `deploy` entry carries the `worker_name`. A dry run
+validates the file as a deploy would, uploading nothing: one wrangler refuses (an environment it lacks, a
+malformed file) stops the subcommand. Nor does anything check that the three files agree, which the operator keeps
+true: the same `database_id` and `RAFI_DO_JURISDICTION`, the app's and the engine's `RAFFLE_ROOM` with the live
+Worker's name as `script_name`, and `RESTATE_IDENTITY_KEYS` on the engine in every environment
+(environments don't inherit vars). A mismatch deploys: an engine without its keys refuses Restate, so the
+registration fails; the rest shows in the first test-mode raffle after an install (the phone doesn't follow the
+draw, or the draw doesn't land). What `deploy.sh` does check before a deploy changes anything is
+`check-remote`'s: the credentials work, and the release isn't older than the one Restate runs.
+
+## Several installations
+
+One account can hold several installations. Each has names of its own for its three Workers (so its own instance,
+and its own engine Workers, `<engine name>-v…`), its own D1 database, address (its app Worker's workers.dev one,
+or its own domain), Clerk application and app secrets, and
+its own Restate environment: every Rafi engine registers the same services (`Raffle`, `EngineInfo`), and Restate
+sends a service's new invocations to its latest deployment, so two installations in one environment would take
+over each other's draws. The account, its workers.dev subdomain and the API token can be shared.
+
+- **A repository each**: a repository per installation, each created from the template, with other names in its
+  configurations. Nothing else differs.
+- **One repository, Wrangler environments**: the configurations' top level is one installation, each
+  `[env.<name>]` (in all three files) another, chosen by `CLOUDFLARE_ENV`, which `deploy.sh` reads and passes on
+  to every wrangler call. An environment's Worker is `<top-level name>-<environment>` unless it names itself
+  (`rafi-app-eu`, `rafi-live-eu`, `rafi-engine-eu-v0-1-0`); it inherits `main`, the static files, `workers_dev`,
+  `preview_urls`, the Cron, the routes and the migrations, but not the vars, the bindings or the required
+  secrets, which it repeats (with its own address, `workers_dev` and `routes` written out, and rate-limit
+  namespaces of its own). Its version file is
+  `VERSION.<environment>` when that exists, `VERSION` otherwise. Each installation has its own copies of the two
+  workflows, with `CLOUDFLARE_ENV` set, a concurrency group of its own, its jobs in a GitHub environment holding
+  its secrets, and its push paths narrowed to its version file. The installations share `legal/` (so the same
+  operator and documents; installations with different ones take a repository each).
+
+INSTALL.md's "Several installations" has both, step by step, with a whole `[env.eu]`.
+
+## The workflows
+
+Both are the installation's own, thin, and name the Rafi repository once (`RAFI_REPOSITORY`). Their environment:
+
+| | |
+|---|---|
+| `RAFI_REPOSITORY` | `sagikazarmark/rafi`: where releases come from, and whose `release.yaml` must have attested them |
+| `CLOUDFLARE_ENV` | Empty: the configurations' top level is the installation. In a copy for an installation that is a Wrangler environment, its name ([above](#several-installations)) |
+
+Their secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` ([the token](#the-api-token)),
+`RESTATE_ADMIN_URL` (`https://<env-id>.env.<region>.restate.cloud:9070`) and `RESTATE_AUTH_TOKEN` (an Admin-role
+API key, [below](#the-restate-keys)). Each step gets only the ones its subcommand uses (not the install step,
+which runs packages' install scripts). Each workflow is one job, which needs `contents: read` only (the release and
+its attestation are public), runs on `ubuntu-latest` with Node.js 24 and `jq`, installs wrangler and the Restate
+CLI from the installation's `package-lock.json` first (`npm ci --no-audit --no-fund`; `deploy.sh` runs them as
+`npx -y wrangler` and `npx -y @restatedev/restate`), and can name a GitHub environment (`environment: production`,
+commented out) for required reviewers or its secrets. Both start the same way: install the tools, read the version
+file (the release to download), `gh release download v<version>` of `worker.tar.gz`, `gh attestation verify` with
+`--signer-workflow github.com/<RAFI_REPOSITORY>/.github/workflows/release.yaml`, `--source-ref refs/tags/v<version>`
+and `--deny-self-hosted-runners`, and unpack it into `release/`.
+
+**`deploy.yaml`** runs on a push to `main` that changes `VERSION`, `VERSION.*`, `legal/**` or a `wrangler.*.toml`,
+and by hand (**Actions > Deploy > Run workflow**, `gh workflow run deploy.yaml`). Then its steps:
+
+| Step | Runs | Needs |
+|---|---|---|
+| **Check Restate and Cloudflare** | `deploy.sh check-remote` | Restate, Cloudflare |
+| **Apply D1 migrations** | `deploy.sh migrate` | Cloudflare |
+| **Deploy live Worker** | `deploy.sh deploy-live` | Cloudflare |
+| **Upload app Worker version** | `deploy.sh upload-app`; outputs `app_version_id` or `app_promoted` | Cloudflare |
+| **Deploy engine Worker** | `deploy.sh deploy-engine`; outputs `engine_worker`, `engine_url` | Cloudflare |
+| **Register engine with Restate** | `deploy.sh register-engine` | Restate, the account ID |
+| **Promote app Worker version** | `deploy.sh promote-app` | Cloudflare |
+
+Every subcommand can be run again, so a failed run is re-run whole. The order is the point: everything that can refuse the deploy first (a release without Rafi's
+attestation, a configuration wrangler's dry run refuses, a release older than the one Restate runs, credentials
+that don't work), before anything touches production; the migrations before any code that needs them, the class before the Workers binding it, and the
+engine registered before the app that calls it switches over, so the app never calls a handler the engine Restate
+runs lacks.
+
+**`restate-cleanup.yaml`** runs daily at 04:37 UTC and by hand, then runs `deploy.sh cleanup`
+([below](#the-restate-cleanup)).
+
+The two share a concurrency group (`rafi` in the template; one per installation when a repository holds several)
+without cancelling: one deploy or cleanup at a time, a run waiting for the one in progress. GitHub keeps one waiting
+run per group, so a newer run replaces a waiting one, which shows as cancelled (a scheduled cleanup queued behind a
+running deploy can cancel another deploy waiting there): run it again. Scheduled workflows run only on the default
+branch, and in a public repository GitHub disables them after 60 days without repository activity.
+
+Each run's log in the installation's **Actions** is the deploy's log, each step printed, and its summary page holds
+the subcommands' reports: the workflows point `deploy.sh`'s `RAFI_OUTPUT_FILE` at `$GITHUB_OUTPUT` (the steps'
+outputs) and its `RAFI_REPORT_FILE` at `$GITHUB_STEP_SUMMARY`. A deploy's summary says whether the live Worker was
+deployed (with its fingerprint tag) or left alone, the app version uploaded (or, on a first install, deployed
+directly), this release's engine Worker and its address, its Restate deployment ID, and the app version deployed
+with its routes and Cron. A cleanup's is [below](#the-restate-cleanup). Each workflow also sets
+`RAFI_ARTIFACTS_DIR` (`rafi-artifacts/` in the workspace) and uploads it whatever happened (`if: always()`), as
+the run's artifact `deploy-json-<attempt>` (`cleanup-json-<attempt>`), kept 14 days: the JSON
+`deploy.sh` read and wrote ([below](#what-each-subcommand-does)).
+
+## What each subcommand does
+
+`release/deploy.sh <subcommand>`, from the installation's root, with the release unpacked into `release/`. Its
+header ([`scripts/cloudflare-deploy.sh`](../../scripts/cloudflare-deploy.sh)) is the reference. Every subcommand
+first reads the release's `VERSION` and, but for `migrate`, the Workers' names from `wrangler deploy --dry-run` of
+each configuration for `CLOUDFLARE_ENV` ([above](#what-an-installation-is)); in short:
+
+| Subcommand | Does | Outputs |
+|---|---|---|
+| `check-remote` | Before anything is deployed, the downgrade check `register-engine` makes (below): a release older than the one Restate runs is refused; nothing registered (a first install) passes. Then the token reads the account's workers.dev subdomain. Restate unreachable, or a key or token that doesn't work, fails it. Reads only. | |
+| `migrate` | `wrangler d1 migrations apply DB --remote` (the app's configuration) | |
+| `deploy-live` | Fingerprints the live Worker (sha256 over its bundle, `wrangler.live.toml`'s bytes and `CLOUDFLARE_ENV`, so any edit of the file, a comment or another environment's section too, redeploys it; the tag `live-<32 hex>`) and reads what the Worker serves (its latest deployment's versions and their `workers/tag` annotations). One version at 100 % with this tag: nothing deployed, the live channels keep their connections. Anything else (no Worker, another tag, a gradual deployment): `wrangler deploy --tag <it>`, which applies the class's migrations. | |
+| `upload-app` | Copies `legal/`'s documents, those there are, into the app's static files (replacing what a run before copied). Refuses an app Worker that doesn't exist (its secrets come first). If a release has run on it (a version tagged `v<version>`, deployed or among its recent versions): `wrangler versions upload --tag v<version>`, not serving yet. Otherwise, a first install: `wrangler deploy`. | `app_version_id`, or `app_promoted=true` |
+| `deploy-engine` | Looks up the account's workers.dev subdomain, then `wrangler deploy --name <engine name>-v<version> --tag v<version>` (`rafi-engine-v0-1-0`), every time (the same release is the same code). | `engine_worker`, `engine_url` |
+| `register-engine` | Refuses a downgrade (again, after `check-remote`, for a release registered since): if the deployment Restate routes new `Raffle` and `EngineInfo` invocations to is this installation's (its metadata) and of a newer release, it stops. Then `POST /deployments` of the engine's URL, `"force": false`, with the metadata `app` (`rafi`), `instance` (the app Worker's name), `version`, `cloudflare_account` and `worker`; 200 (Restate had it) and 201 succeed, a 5xx or no answer is retried five times (a Worker deployed a moment ago), anything else fails. | |
+| `promote-app` | After a first install, nothing. Otherwise `wrangler versions deploy <id>@100%`, then `wrangler triggers deploy` (the app's address, workers.dev on or off and the custom domain if any, and the Cron, which a version upload doesn't apply). | |
+| `cleanup` | [Below](#the-restate-cleanup). | |
+| `dry-run` | `legal/`'s documents copied in, then the three `wrangler deploy --dry-run` that read the names. No credentials, nothing remote. | |
+
+Outputs are appended to `RAFI_OUTPUT_FILE` as `key=value` lines when it is set, and printed otherwise; the later
+subcommands take them as `RAFI_APP_VERSION_ID`, `RAFI_APP_PROMOTED`, `RAFI_ENGINE_WORKER` and `RAFI_ENGINE_URL`.
+`deploy-live`, `upload-app`, `deploy-engine`, `register-engine`, `promote-app` and `cleanup` print a Markdown
+report of what they did, and append it to `RAFI_REPORT_FILE` when it is set. Every wrangler call gets
+`CLOUDFLARE_ENV`. `deploy.sh` installs nothing: wrangler is `npx -y wrangler` and the Restate CLI `npx -y
+@restatedev/restate` (`package.json`'s once installed; the latest when none is), or the commands `WRANGLER` and
+`RESTATE` name. It reads every JSON answer with `jq`, and stops at once without it. With `RAFI_ARTIFACTS_DIR` set,
+it keeps that JSON in `<dir>/<subcommand>/` (replaced on each run): wrangler's ND-JSON output of every call
+(`wrangler-<what>.ndjson`: the dry runs, the deploys, the upload, the migrations), Restate's services and
+deployments (`restate-services.json`, `restate-deployments.json`, the CLI's `restate-deployments-list.json`), the
+registration's answer (`restate-register.json`), the account's Workers (`cloudflare-workers.json`) and the
+cleanup's summary (`cleanup.json`: `removed`, `deleted`, `not_removed`, `draining` with the paused invocations,
+`kept`, `left_behind`, `leftover`, `not_ours`, `failed`). The exit status is 0, 1 on a failure or refusal, 2 on a
+usage error. Tokens reach `curl` only on its standard input, so none is among the artifacts.
+
+Every subcommand can run again, and a failed run is retried by running it again (**Re-run jobs**). What a
+failed run leaves: migrations apply forward and stay; a live Worker deployed stays (a re-run skips it); an
+uploaded app version not deployed is harmless; an engine Worker deployed but not registered serves nothing until a
+re-run registers it; a registered engine stays the latest deployment even if the app's switch then failed (the
+previous app calls the same handlers unless the release notes say otherwise), and a re-run finishes the switch.
+
+## The Restate cleanup
+
+`deploy.sh cleanup` lists Restate's deployments twice, with their metadata (the admin API's `GET /deployments`) and
+with their status (`restate deployments list --extra --json`), and the account's Workers (`GET
+/accounts/{account_id}/workers/scripts`), and stops before removing or deleting anything if any listing fails. It
+touches only this installation's deployments: metadata `app` `rafi`, `instance` the app Worker's name,
+`cloudflare_account` the account, `worker` named `<engine name>-v…`, and its address that Worker's workers.dev one.
+For each:
+
+- **Drained**: first removes the deployment from Restate (`restate deployments remove`, never forced: Restate
+  refuses one that isn't drained, and a refusal leaves its Worker untouched for the next run), then deletes its
+  Worker (`DELETE /accounts/{account_id}/workers/scripts/<worker>`; 404, already gone, is fine). A deletion that
+  fails leaves the Worker behind, reported; the cleanup carries on with the others and fails at the end. The
+  deployment goes first so that Restate never holds a deployment whose Worker is gone.
+- **Draining**: lists the invocations still pinned to it (`/query`), with its active and paused counts. A
+  **paused** one (Restate stopped retrying it, as its retry policy says, and waits for a human) keeps it draining
+  until someone resumes it on the latest deployment or kills it ([Upgrades](upgrades.md#on-workers-automatic)).
+- **Active**: kept.
+
+Deployments that aren't this installation's (one registered by hand, or with other metadata) are listed and never
+touched. The account's `<engine name>-v<version>` Workers that none of this installation's Restate deployments
+(`app` `rafi`, `instance` the app Worker's name, `cloudflare_account` this account) refers to, by the deployment's
+address or its metadata's `worker` (one left behind by a failed deletion, or one a failed deploy never registered;
+this release's own excepted, which its deploy registers; another installation's deployment referring to one doesn't
+count), are reported with the command to delete them by hand (`npx -y wrangler delete <worker>`), and never
+deleted by the cleanup: nothing tells it whether one is still needed.
+
+The report (the run's summary) lists what was removed and deleted, what Restate refused to remove, what still
+drains (with the paused invocations' IDs and the `restate invocations resume <id> --deployment latest` and `restate
+invocations kill <id>` commands), the Workers left behind, and the deployments that aren't this installation's.
+`cleanup.json`, among the run's artifacts, has the same in JSON.
+
+**Don't rename the app Worker**: its name is the installation's `instance`, so the engines registered under the old
+one become another installation's to the cleanup (listed, never touched) and to the downgrade check (no check).
+Remove those yourself once Restate reports them drained (`restate deployments remove <id>`, then `npx -y wrangler
+delete <worker>`). Renaming or transferring the repository changes nothing.
+
+## The API token
+
+An account API token, owned by the account rather than a user, so it survives its creator leaving, for the account,
+and, when the app is on a custom domain, the installation's zone (several installations in one account can share
+one, with Workers Routes on the zone of each one on a domain). INSTALL.md's step 2 creates it in the
+dashboard: **Manage account > Account API tokens > Create Token**, a custom token with these permissions and
+nothing else (Cloudflare's [Account API
+tokens](https://developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens/) and [Create API
+token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/); the names are its
+[permissions reference](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)'s):
+
+| Permission (dashboard · API name) | What uses it |
+|---|---|
+| Account · Workers Scripts · Edit (`Workers Scripts Write`) | Uploading and deploying the three Workers (`PUT …/workers/scripts/{name}`, versions and deployments), their secrets, Cron (`…/schedules`), settings, workers.dev on or off (`…/subdomain`), the Durable Object class's migrations (part of the upload), the app's custom domain; reading deployments and versions (`deploy-live`, `upload-app`); the account's workers.dev subdomain (`GET /accounts/{id}/workers/subdomain`); listing the account's Workers (`GET /accounts/{id}/workers/scripts`, the cleanup) and deleting a drained engine Worker (`DELETE …/workers/scripts/{name}`) |
+| Account · D1 · Edit (`D1 Write`) | `wrangler d1 migrations apply DB --remote` (the database's details and queries) |
+| Zone · Workers Routes · Edit (`Workers Routes Write`), the installation's zone | Only with a custom domain ([the app's address](#the-apps-address)): the app Worker's hostname on the zone |
+
+Sources: the "Accepted Permissions" of each endpoint in Cloudflare's API reference (the OpenAPI schema's
+`x-api-token-group`): Workers Scripts Write for the scripts, their versions, deployments, secrets, schedules,
+settings and subdomain, the account's workers.dev subdomain and the Workers custom-domain endpoints; D1 Write for a
+database and its queries; Workers Routes Write for a zone's Workers routes. Wrangler attaches a custom domain through
+an account-level Workers endpoint, and Cloudflare creates its DNS record and certificate on the zone; Cloudflare's
+**Edit Cloudflare Workers** token template, which its CI guide recommends for wrangler, includes Workers Routes on
+zones, and the token keeps it for the hostname. On workers.dev the app needs none of it: with no routes, `wrangler
+triggers deploy` (and a first install's `wrangler deploy`) reads and turns on the Worker's workers.dev address
+(`…/workers/scripts/{name}/subdomain` and the account's subdomain, Workers Scripts) and sets the Cron, with no zone
+call (wrangler 4.148.0's source). Not needed: Workers Tail Read (only `wrangler tail`, run by you),
+Account Settings Read, Memberships and User Details (wrangler reads `/memberships` and `/user` only for `wrangler
+whoami` and to explain an authentication error, and the account ID is given), KV, R2. That template plus Account ·
+D1 · Edit is a superset, if you'd rather start from it.
+
+Creating account tokens takes a Super Administrator, or a member with API token provisioning, and a token can't get
+a permission its creator lacks. By the API, it is Create Token (`POST /accounts/{account_id}/tokens`, its
+policies naming the account resource `com.cloudflare.api.account.<id>`, the zone resource
+`com.cloudflare.api.account.zone.<id>`, and the permission groups by ID, which List Permission Groups, `GET
+/accounts/{account_id}/tokens/permission_groups`, gives by name). The account's ID is in `npx wrangler whoami`'s
+answer, or the dashboard ([Find account and zone
+IDs](https://developers.cloudflare.com/fundamentals/account/find-account-and-zone-ids/)).
+
+Cloudflare shows a token's value once, when it is created: it goes straight into `gh secret set
+CLOUDFLARE_API_TOKEN` (which prompts for it), never into a file. Lost before it reached GitHub, the token's
+**Roll** in **Account API tokens** gives it a new value, which replaces the old one at once; set the secret again.
+Rotating it is in the [runbook](runbook.md#rotating-secrets).
+
+## The Restate keys
+
+Restate Cloud's API keys each have a role.
+
+- **The app's key**, `RESTATE_INGRESS_API_KEY`, a secret on the app Worker: the app only invokes the engine through the
+  ingress (`https://<env-id>.env.<region>.restate.cloud:8080`, `<env-id>` the environment's ID without `env_`;
+  `RESTATE_INGRESS_URL`), never the admin API. Give it the narrowest role the console offers that can call the
+  ingress (Restate's guides name **Admin** for deploying and **Full** for tunnels); if none narrower than **Full**
+  is listed, **Full**.
+- **The workflows' key**, `RESTATE_AUTH_TOKEN`, a GitHub secret, with the **Admin** role, as Restate's deployment
+  guides say for registering: `check-remote` and `register-engine` read `GET /services` and `GET /deployments`,
+  and `register-engine` calls `POST /deployments`; `cleanup` reads `GET /deployments`, `POST /query` (the pinned
+  invocations), and runs the Restate CLI's `deployments list` and `deployments remove` (with `RESTATE_ADMIN_URL`
+  and `RESTATE_AUTH_TOKEN` in its environment).
+
+The engine's `RESTATE_IDENTITY_KEYS` is the environment's request identity public key
+(`publickeyv1_…`, **Developers > Security > HTTP endpoints** in Restate Cloud), not a key to call Restate with.
+
+## The app Worker's secrets
+
+The installation's values are the app Worker's secrets, set once before the first deploy (`wrangler secret bulk
+.dev.vars -c wrangler.app.toml`, which creates the Worker holding only them; `upload-app` refuses a Worker that
+doesn't exist) and changed with `wrangler secret put <NAME> -c wrangler.app.toml`; deploys keep them. For an
+installation that is a Wrangler environment, either with `CLOUDFLARE_ENV=<environment>` (or `--env`).
+`wrangler.app.toml` lists them under `[secrets] required` (an environment, under `[env.<name>.secrets]`), and
+wrangler refuses to deploy the app while one is missing. What each is:
+`.dev.vars.example` and the
+[configuration reference](../reference/configuration.md). The Worker refuses every request without
+`RAFI_POW_KEY`, `RESTATE_INGRESS_URL`, `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` or the operator, or with a
+document without its version (`/healthz` answers `500 misconfigured`, naming the reason when that names no value). Release builds
+reject dev auth and the mock chain. Never rotate `RAFI_POW_KEY` during an event.
+
+## The legal documents and the operator
+
+The Worker serves the operator's documents from the installation's `legal/`, each optional: `terms.md` (with the
+data processing agreement, which organizers accept by using the service) and `privacy.md` (the operator's own
+notice). Rafi ships neither; what the software does, for writing them, and what changes without them, is in [Your
+legal documents](legal-documents.md). One not there is a page saying the operator hasn't provided it. Each one
+there starts with its version, in front matter (`---`, `version: 2026-11`, `---`; [the
+format](../reference/configuration.md#the-legal-documents-versions)); without it the Worker refuses every request,
+naming the file. The operator's name and email (`RAFI_OPERATOR_NAME`, `RAFI_OPERATOR_EMAIL`) are secrets. A changed
+document is a new version (change its `version:` line with the text), shown with it (on `/terms` and `/privacy`,
+and every raffle's notice names the privacy notice's), and deploys with a push of `legal/`; a change to the
+processing agreement is notified to organizers directly, since nothing records who read which version. Your record
+of processing is in [the operator's records](overview.md#the-operators-records). The retention settings
+(`RAFI_RETENTION_DAYS` and the others, see the [configuration](../reference/configuration.md)) have defaults;
+`RAFI_MIN_AGE` too; set them as secrets if you change them.
+
+## Upgrading
+
+Change `VERSION` (an installation that is a Wrangler environment: its `VERSION.<environment>`, when it has one)
+and push, between events; never to an older release ([Upgrades](upgrades.md#database-migrations)): the migrations
+only go forward, and the deploy refuses a release older than the one Restate runs in its first deploy step
+(`check-remote`), before touching anything. The release notes say when a configuration, `.dev.vars.example` or a
+secret changed shape, when the live Worker changed (that deploy drops the live connections), and when the
+template's workflows changed.
+
+The workflows drive the release's `deploy.sh` (its subcommands, their environment and outputs), and nothing checks
+an installation's copies against the release: a release that changes how `deploy.sh` is driven says so in its
+notes, and the operator copies `deploy.yaml` and `restate-cleanup.yaml` from the template repository
+(`sagikazarmark/rafi-deploy-template`) at that tag before pushing `VERSION` (redoing each copy's edits, with
+several installations in one repository):
+
+```sh
+for f in deploy.yaml restate-cleanup.yaml; do
+  gh api -H 'Accept: application/vnd.github.raw' \
+    "repos/sagikazarmark/rafi-deploy-template/contents/.github/workflows/$f?ref=v<version>" > ".github/workflows/$f"
+done
+```
+
+A change to the template's configurations is the operator's to carry over, keeping their names, IDs and keys:
+compare each `wrangler.*.toml` with the template's at the new tag (`gh api -H 'Accept: application/vnd.github.raw'
+"repos/sagikazarmark/rafi-deploy-template/contents/wrangler.app.toml?ref=v<version>"`, and the other two).
+
+wrangler and the Restate CLI move apart from Rafi's releases, when the operator chooses: `npm update --no-audit
+--no-fund`, then commit `package-lock.json` (the release notes say when a release needs newer ones).
+
+A release has one asset, `worker.tar.gz`; the release page shows its SHA256 digest (GitHub computes one for every
+upload, and the release workflow checks it is the build's), and releases are immutable once published, so neither
+the asset nor the tag under a version changes. The deploy verifies the attestation; by hand:
+
+```sh
+gh release download v<version> -R sagikazarmark/rafi -p worker.tar.gz
+gh attestation verify worker.tar.gz -R sagikazarmark/rafi \
+  --signer-workflow github.com/sagikazarmark/rafi/.github/workflows/release.yaml \
+  --source-ref refs/tags/v<version> --deny-self-hosted-runners
+```
+
+## What only a real deploy can check
+
+Nothing in this repository's CI holds a Cloudflare token: deploys run in installations' repositories. CI runs the
+production shapes through `wrangler deploy --dry-run`, serves the app without secrets, runs `deploy.sh`'s
+subcommands against a stubbed wrangler and Restate CLI and a fake Cloudflare and Restate API
+(`scripts/cloudflare-deploy-test.sh`), and runs a development tarball's `deploy.sh dry-run` from a copy of
+`testdata/cloudflare-installation`, the template's configuration ([Testing](../development/testing.md#workers)). What only a real deploy can check, so check it
+on the first one:
+
+- the token's permissions cover every step (the custom domain if there is one, the app's workers.dev address
+  turned on if not, the workers.dev subdomain lookup, the account's
+  Workers listed and a drained engine Worker deleted included), and the Admin key every Restate call (registering,
+  listing, `/query`, removing);
+- on workers.dev with a Clerk development instance, organizers sign in (its dev browser, `__clerk_db_jwt` in the
+  URL), and the session's `azp` is `RAFI_PUBLIC_URL`;
+- a repository created from the template repository runs the Deploy workflow for its first commit (GitHub's
+  [`push` event](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push)
+  says creating a repository from a template triggers it), which fails at **Check Restate and Cloudflare**
+  until the secrets are set, as INSTALL.md's step 1 says;
+- the workflows read the release and its attestation with the repository's own `GITHUB_TOKEN`, and the reports
+  land on the run's summary page;
+- the API shapes `deploy.sh` reads (deployments, versions and their annotations, the subdomain, the account's
+  Workers) are as wrangler 4.148.0's source and Cloudflare's API reference have them, and the wrangler and Restate
+  CLI `package.json` installs write the JSON it reads (the dry run's `deploy` entry, `deployments list --json`);
+- the app Worker reaches Restate Cloud's ingress on its port (`:8080`): `workerd` allows any port, production has
+  port rules for proxied hosts; Restate Cloud's `:443` alias is the fallback;
+- the startup time `wrangler deploy` reports stays under the 400 ms limit for each Worker;
+- the Durable Objects' jurisdiction, when `RAFI_DO_JURISDICTION` sets one (`ns.jurisdiction("eu")`), is reached
+  only in production (workerd has none, so local development leaves it unset): from the app (a phone's first
+  connect) and from the engine (the first draw's nudge), both through their bindings to the live Worker's class;
+- Restate Cloud calls the engine's `/restate/*` on workers.dev over HTTP/2 (locally HTTP/1.1 only);
+- the paid Workers plan: BLS verification and server-side rendering don't fit the free plan's CPU time;
+- a second release's deploy registers its engine, and once the first engine has drained, the cleanup removes it
+  from Restate and then deletes its Worker; a deploy that doesn't change the live Worker keeps phones connected;
+- a second installation in the same account, as a Wrangler environment, deploys beside the first without touching
+  its Workers, and each one's cleanup leaves the other's deployments alone.
+
+## From source
+
+Instead of a release, build one here into your installation's `release/` and run its `deploy.sh` there, in the
+workflows' order, with their environment (`CLOUDFLARE_ENV` too, for an installation that is a Wrangler
+environment):
+
+```sh
+just cloudflare-artifact <version> /path/to/your/installation/release
+cd /path/to/your/installation
+export CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=…
+RESTATE_ADMIN_URL=… RESTATE_AUTH_TOKEN=… release/deploy.sh check-remote
+release/deploy.sh migrate
+release/deploy.sh deploy-live
+release/deploy.sh upload-app        # prints app_version_id=… (or app_promoted=true)
+release/deploy.sh deploy-engine     # prints engine_worker=… and engine_url=…
+RESTATE_ADMIN_URL=… RESTATE_AUTH_TOKEN=… RAFI_ENGINE_WORKER=… RAFI_ENGINE_URL=… release/deploy.sh register-engine
+RAFI_APP_VERSION_ID=… release/deploy.sh promote-app    # or RAFI_APP_PROMOTED=true
+```
+
+The installation is the app Worker's name in your configuration, the same whether the workflows or you run it, so
+the cleanup and the downgrade check see one installation. Run `npm ci` in the installation first (its
+`package.json`'s wrangler and Restate CLI, which `deploy.sh` runs with `npx -y`), or, in the devenv shell,
+`WRANGLER=wrangler` uses its wrangler; `deploy.sh` needs `jq` either way. `RAFI_ARTIFACTS_DIR=<dir>` keeps the
+JSON, as the workflows do.
+`just cloudflare-artifact` is what the release workflow packs. The version names the engine Worker,
+so a build of your own deploys an engine of its own; the rule against older builds holds the same.
+
+## Data residency
+
+By default the database and the Durable Objects are wherever Cloudflare places them. Keeping them in the EU is
+optional and a first-deployment decision (INSTALL.md's "Keeping data in the EU"):
+
+- **D1** created with `wrangler d1 create <name> --jurisdiction eu`: a database's jurisdiction is fixed when it
+  is created, so a later move is a new database and a restore into it.
+- **Durable Objects** from an EU-jurisdiction namespace: `RAFI_DO_JURISDICTION = "eu"` in all three configurations
+  and in every `[env.<name>.vars]`, before the first deploy. Unset or empty, the code uses the plain namespace;
+  set, `ns.jurisdiction(<it>)` (`crates/cloudflare/src/gate.rs`). An object's jurisdiction is fixed when its ID is
+  created, so changing the setting later moves the live channels to new objects, the old ones left behind; and
+  nothing compares the three files, so a mismatch shows as phones that don't follow the draw.
+- **Restate Cloud**: an environment in the EU region, which keeps the engine's invocations and journals.
+
+Not covered by any of it: the Workers run near each visitor, wherever that is, and handle the data they read
+there; Clerk (organizers' accounts) is a US company, under the EU-U.S. Data Privacy Framework. drand, the public
+randomness, gets no personal data. The privacy
+template's provider table has the hosting's location and Restate's region as bracketed choices. Keeping where
+Workers run inside a region is Cloudflare's
+[Regional Services](https://developers.cloudflare.com/data-localization/regional-services/), an Enterprise add-on
+(a hostname's requests decrypted and handled, Workers scripts among what it lists, only in the chosen region's data
+centers); Rafi neither needs nor configures it, and what it would cover of these Workers (the engine, and the app
+without a custom domain, are on workers.dev, not the installation's zone) is Cloudflare's to say.
+
+**Placement** is a latency option, not a residency control, and not tied to the first deploy: by default the app
+Worker handles each request in the data center nearest the visitor, which then reaches the D1 database and Restate
+Cloud from there, a round trip each. `wrangler.app.toml` has a commented-out
+`[placement]` block with its two choices, which exclude each other, `mode = "smart"` (Cloudflare measures the
+Worker's requests from the locations it already runs in and forwards them to a significantly faster one, if there
+is one) and `region = "aws:eu-central-1"` (the data center with the lowest latency to that cloud region; Restate
+Cloud's, say; `gcp:` and `azure:` regions are named the same way), so the app's request handling runs near the D1
+database and Restate Cloud instead of near each visitor (INSTALL.md, "Placement"). From
+[Cloudflare's placement documentation](https://developers.cloudflare.com/workers/configuration/placement/): "Workers
+run on Cloudflare's global network, not inside cloud provider regions", so a region names where to run *near*, not
+*in*; placement only affects the fetch handler (every request the app answers, phones' live-channel connections on
+their way to the raffle's object included; not the app's hourly Cron); static assets are always served from the
+location nearest the visitor; and at very high request volumes Cloudflare may run instances across a more
+distributed area. The live Worker has nothing to set (Durable Objects are placed automatically), and neither has
+the engine: only Restate Cloud calls it, so it already runs near Restate.
+
+Either way:
+
+- The automatic per-invocation logs are off, because they would record client IPs and cookies; the application's
+  own lines (warnings and errors, with raffle IDs and error text) are kept.
+- D1 Time Travel keeps erased data for up to 30 more days. Say so in your privacy notice (the template does). Time
+  Travel is also the backup: the [runbook](runbook.md#backups-and-restore) has the restore, in order. After
+  restoring with Time Travel, re-apply the erasures. The hourly housekeeping erases again whatever is past its date
+  on its own (the dates are in the raffles themselves), and whoever took themselves off a raffle that is over, and
+  forgets the removals at their request of raffles that are frozen, purged or past their date (the last statement
+  below does the same at once). What it can't know is what organizers erased before the
+  date, or who removed their data: for those, put back what the live database had (the runbook's steps 1 and 3:
+  the `erasures` log, `purged_at` and `organizer_left_at`, and the rest), then run the restore tool's statements
+  against D1 (the same SQL `rafi reapply-erasures` runs natively, see [Self-hosting](self-hosting.md#backups)):
+
+  ```sh
+  wrangler d1 execute rafi --remote --command "
+    -- Entrants the log names (if the log came along).
+    UPDATE entrants SET display_name = '#' || substr(id, 1, 6), email_raw = NULL, email_norm = NULL,
+      list_ref = NULL, token_hash = NULL, claim_code = NULL, erased = 1
+    WHERE erased = 0 AND EXISTS (SELECT 1 FROM erasures
+      WHERE erasures.raffle_id = entrants.raffle_id AND erasures.entrant_id = entrants.id);
+    -- Entrants of a purged raffle, or one whose organizer left: nobody in it is
+    -- un-erased, whether or not the log came along. Logged, then erased.
+    INSERT INTO erasures (raffle_id, entrant_id, at)
+      SELECT raffle_id, id, unixepoch() FROM entrants
+      WHERE erased = 0
+        AND EXISTS (SELECT 1 FROM raffles r WHERE r.id = entrants.raffle_id
+                      AND (r.purged_at IS NOT NULL OR r.organizer_left_at IS NOT NULL))
+        AND NOT EXISTS (SELECT 1 FROM erasures e WHERE e.raffle_id = entrants.raffle_id AND e.entrant_id = entrants.id);
+    UPDATE entrants SET display_name = '#' || substr(id, 1, 6), email_raw = NULL, email_norm = NULL,
+      list_ref = NULL, token_hash = NULL, claim_code = NULL, erased = 1
+    WHERE erased = 0 AND EXISTS (SELECT 1 FROM raffles r WHERE r.id = entrants.raffle_id
+      AND (r.purged_at IS NOT NULL OR r.organizer_left_at IS NOT NULL));
+    UPDATE raffles SET state = 'purged' WHERE purged_at IS NOT NULL AND state <> 'purged';
+    UPDATE raffles SET organizer_name = '', contact_email = '', privacy_email = '', privacy_text = '',
+      privacy_url = '' WHERE organizer_left_at IS NOT NULL AND (organizer_name <> '' OR contact_email <> ''
+      OR privacy_email <> '' OR privacy_text <> '' OR privacy_url <> '');
+    -- Removals at their request no add can need any more.
+    DELETE FROM add_removals WHERE raffle_id IN (SELECT id FROM raffles
+      WHERE manifest IS NOT NULL OR purged_at IS NOT NULL OR erase_at <= unixepoch());"
+  ```
+
+## Limits
+
+The rate limits are Workers rate-limiting bindings (600 joins/min per raffle, 5/min per raffle and email, 20 adds
+or undos/min per organizer, 600/min live connections). They are soft, per Cloudflare location. The hard limit is
+`RAFI_MAX_ENTRANTS`, enforced in D1.
+
+## Troubleshooting
+
+| Symptom | Cause, and what to do |
+|---|---|
+| Any `deploy.sh` step but the migrations, at once: `wrangler deploy --dry-run -c <file> … failed (above)` | wrangler refuses that configuration (its error is above it in the log): a malformed file, or, with `CLOUDFLARE_ENV` set, an environment the file has no `[env.<name>]` for (add it to all three, or fix the name). |
+| … `reported no Worker's name` | wrangler's dry run wrote no `deploy` entry with a Worker's name into its ND-JSON output: a wrangler too old for it, or a name that isn't a Worker's (a-z, 0-9, -). The `wrangler-dry-run-<worker>.ndjson` artifact has what it wrote. |
+| **Read version file**: `… not a Rafi release` | The version file (`VERSION`, or `VERSION.<environment>`) isn't a version (`x.y.z`, or `x.y.z-pre.release`): fix it and push. Nothing else compares it with the release: `deploy.sh` deploys the release it came in. |
+| **Apply D1 migrations** fails on the database `00000000-0000-0000-0000-000000000000` | A configuration still has the template's zero `database_id` (nothing looks for it): INSTALL.md step 3, the ID in all three files. |
+| Any step, at once: `jq isn't installed` | `deploy.sh` reads every JSON answer with `jq` (GitHub's runners have it): install it where you run it. |
+| **Install dependencies** fails | `npm ci` refuses a missing `package-lock.json`, or one that doesn't match `package.json`: run `npm install` and commit the lockfile. Otherwise npm couldn't reach its registry: run it again. |
+| Prepare fails at **Download release** or **Verify release provenance** | No release `v<VERSION>` (a typo, or a version not released yet), or a tarball that Rafi's release workflow didn't build from that tag on GitHub's runners: never work around this. |
+| **Upload app Worker version**: `the app Worker rafi-app doesn't exist on the account` | Its secrets come first: INSTALL.md step 8 (with `CLOUDFLARE_ENV=<name>` for an environment's Worker). |
+| **Upload app Worker version**: wrangler names missing secrets | One of `[secrets] required` isn't set: `wrangler secret put <NAME> -c wrangler.app.toml`. |
+| **Deploy engine Worker**: `the account's workers.dev subdomain: HTTP …` | The account has no workers.dev subdomain (register it on the dashboard's **Workers & Pages** page), or the token lacks Workers Scripts. |
+| Any Cloudflare step: `Authentication error` (10000) or 403 | The token is missing a permission or the zone (above), expired, or rolled: replace the `CLOUDFLARE_API_TOKEN` secret. |
+| **Check Restate and Cloudflare**: `refusing to deploy an older release (a downgrade)` | The version file is older than the release Restate runs; nothing was deployed. Set it to that release or later; never roll back. |
+| **Check Restate and Cloudflare**: `no answer from …`, 401 or 403 | `RESTATE_ADMIN_URL` isn't the environment's admin API (`:9070`), `RESTATE_AUTH_TOKEN` isn't an Admin-role key of it, or the Cloudflare token or account ID is wrong (the workers.dev subdomain lookup): fix the secret, run it again. |
+| **Register engine with Restate**: `refusing to register an older engine (a downgrade)` | A newer release was registered after this run's **Check Restate and Cloudflare**: set the version file to that release or later; never roll back. |
+| **Register engine with Restate**: 401 or 403 | `RESTATE_AUTH_TOKEN` isn't an Admin-role key of this environment, or `RESTATE_ADMIN_URL` is another environment's (or the ingress, `:8080`). |
+| **Register engine with Restate**: Restate couldn't discover the engine (at once, or after five attempts) | Restate couldn't reach the engine (workers.dev not serving it yet), or the engine refused the discovery because the identity key in `wrangler.engine.toml` isn't this environment's (still the template's `publickeyv1_…`, say: nothing looks for it; or, in a Wrangler environment, its `[env.<name>.vars]` has none: vars aren't inherited): check the engine Worker's logs, fix, re-run it. |
+| A deploy shows as cancelled | A newer run replaced it while it waited (the concurrency group): run it again. |
+| `/healthz` answers `500 misconfigured` | Missing secrets, or a document without its version (`legal/terms.md: no front matter`): the reason is in the answer when it names no value, and in the app Worker's logs. |
+| Organizers sign in to Clerk but the admin refuses them | The app was opened at an address other than `RAFI_PUBLIC_URL`'s origin, whose sessions Rafi refuses (their `azp`): use that address, and with a custom domain keep `workers_dev = false` ([the app's address](#the-apps-address)). Or `RAFI_PUBLIC_URL` isn't exactly the address's origin (another scheme or host, or a path). |
+| The app's workers.dev address doesn't answer | `workers_dev = false` with no routes leaves the app no address; a first install's `wrangler deploy` or the next `promote-app` turns workers.dev on once `workers_dev = true`. |
+| The admin says the raffle engine can't be reached | `RESTATE_INGRESS_URL` or `RESTATE_INGRESS_API_KEY` wrong, or Restate Cloud down: the [runbook](runbook.md#when-the-raffle-engine-is-down-during-an-event). |
+| Phones don't update live | The app's logs (`nudging … failed`), the live Worker's logs; `RAFFLE_ROOM` bound with `script_name` the live Worker's name; the same `database_id` and `RAFI_DO_JURISDICTION` in all three configurations (nothing compares them: the app and the engine in different jurisdictions reach different objects). |
+| The cleanup reports a deployment draining for days | A paused invocation: resume or kill it ([Upgrades](upgrades.md#on-workers-automatic)). |
+| The cleanup fails: `… couldn't be listed: nothing removed or deleted`, or `listing Restate's deployments: …` | A listing failed (the token, the Restate key or admin URL, or either service down), so it touched nothing: fix the secret, or run it again later. |
+| The cleanup fails `in part`: **Not removed** in its report | Restate refused to remove a deployment it had reported drained (its answer is in the run's log): its Worker is untouched, and the next run tries again. |
+| The cleanup fails `in part`: **Workers left behind** | A deployment was removed but deleting its Worker failed (the token, or Cloudflare): nothing refers to that Worker any more, so later runs only report it. Delete it by hand with the command in the report. |
+| The cleanup reports a Worker left behind that no deployment of this installation refers to | An engine Worker of this installation's name (`<engine name>-v…`) that none of its Restate deployments refers to: one a failed deletion left, or an earlier deploy deployed and never registered. Delete it by hand once you're sure nothing needs it (`npx -y wrangler delete <worker>`). Only this installation's deployments count, so another installation's Worker whose name starts the same is reported too: leave that one to its installation. |
+| The cleanup doesn't run | Scheduled runs happen on the default branch only, and a public repository's are disabled after 60 days without activity: enable it again (**Actions > Restate cleanup**). |
+
+Logs: each deploy and cleanup is a run in the installation's **Actions**, its summary page with the reports; each
+Worker has its own Workers Logs (the dashboard's **Workers & Pages >** the Worker **> Logs**, or `npx -y wrangler
+tail <Worker>`): `rafi-app`, `rafi-live`, and each release's `rafi-engine-v…` (an installation's own names, if it chose
+them). [Troubleshooting](troubleshooting.md) has the rest.
+
+## Local development
+
+`devenv --profile workers up` (see [Getting started](../development/getting-started.md#profiles), or
+[without devenv](../development/getting-started.md#cloudflare-workers)), and `./scripts/workers-check.sh` in
+[Testing](../development/testing.md#workers).

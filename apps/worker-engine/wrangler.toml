@@ -1,0 +1,46 @@
+# Rafi's raffle engine Worker (production): the Restate endpoint under
+# /restate; every other path is a 404. It writes draws to the app's database
+# and nudges the live Worker's RaffleRoom objects. No secrets. Locally,
+# apps/worker runs the engine.
+#
+# Nothing installation-specific lives here; an installation's copy is
+# wrangler.engine.toml (docs/operations/cloudflare.md), checked against this
+# file in CI.
+
+name = "rafi-engine"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+# Restate Cloud calls the workers.dev address; requests must be signed.
+workers_dev = true
+preview_urls = false
+
+[build]
+command = "worker-build --release"
+
+# The app's database, for draw states.
+[[d1_databases]]
+binding = "DB"
+database_name = "rafi"
+database_id = "00000000-0000-0000-0000-000000000000" # placeholder
+migrations_dir = "../../migrations/sqlite"
+
+# The live Worker's class, so no [[migrations]] here.
+[[durable_objects.bindings]]
+name = "RAFFLE_ROOM"
+class_name = "RaffleRoom"
+script_name = "rafi-live"
+
+# Application log lines are kept; per-invocation records are not.
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false
+
+#   RAFI_DO_JURISDICTION    optional, matching the app's and the live Worker's
+#   RESTATE_IDENTITY_KEYS   Restate public key(s), comma separated; empty refuses all
+# Optional with defaults: RAFI_DRAND_RELAYS, RAFI_DRAND_LEAD_SECS,
+# RAFI_DRAND_TIMEOUT_SECS.
+[vars]
+# RAFI_DO_JURISDICTION = "eu"
+RESTATE_IDENTITY_KEYS = "" # set per installation

@@ -1,0 +1,448 @@
+//! How an engine gets its beacon: Rafi's drand settings on top of [`drand`]
+//! (which chain, which relays, how far ahead a draw commits, and how long a
+//! draw waits for its beacon) and the client every engine draws with.
+//!
+//! Every engine commits to a round by [`DrandClient::target_round`]'s rule
+//! (the Restate engine through `restate_drand`, with the same lead).
+//!
+//! The chain is quicknet, or (with `mock = true` and the `mock-drand`
+//! feature) the mock chain (`rafi_raffle::drand::mock_chain`).
+//!
+//! HTTP is the host's: whoever builds the client hands it an
+//! [`HttpTransport`] for the relays ([`DrandClientBuilder::http_transport`]).
+//! Natively that is `drand`'s `ReqwestTransport`; on Cloudflare Workers, its
+//! `TowerTransport` over `tower-worker-fetch`. This crate names neither.
+
+use std::{sync::Arc, time::Duration};
+
+pub use ::drand::client::Error as FetchError;
+/// What the relays are asked through (`drand::client::HttpTransport`).
+pub use ::drand::client::HttpTransport;
+use ::drand::{
+    ChainHash, ChainInfo, Schedule, UnixTime, VerifiedBeacon, chains,
+    client::{Client, Clock, Strategy, SystemClock},
+    http::Relay,
+};
+use anyhow::{Context, anyhow, bail, ensure};
+#[cfg(feature = "mock-drand")]
+use rafi_raffle::drand::mock_chain;
+use serde::{Deserialize, Serialize};
+
+/// Beacon and timing settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DrandConfig {
+    /// Relays to ask, in order: `v2:https://…`, `v1:https://…`, or a bare URL (v1).
+    pub relays: Vec<String>,
+    /// Use the public test chain instead of quicknet (development and tests only:
+    /// NOT verifiable as drand; needs the `mock-drand` feature).
+    pub mock: bool,
+    /// Seconds between starting a draw and its committed round. At least one
+    /// quicknet period (3 s); 0 only with `mock`.
+    pub lead_secs: u64,
+    /// Give up fetching a beacon after this many seconds (the draw stays
+    /// pending on its round; pressing Draw again retries the same round).
+    pub timeout_secs: u64,
+}
+
+impl Default for DrandConfig {
+    fn default() -> Self {
+        Self {
+            relays: vec![
+                "v2:https://api.drand.sh".into(),
+                "v2:https://api2.drand.sh".into(),
+                "v2:https://api3.drand.sh".into(),
+                "v1:https://drand.cloudflare.com".into(),
+            ],
+            mock: false,
+            lead_secs: 6,
+            timeout_secs: 60,
+        }
+    }
+}
+
+impl DrandConfig {
+    /// The settings from flat variables, for hosts without a configuration
+    /// file (Workers' vars): `RAFI_DRAND_RELAYS` (comma-separated),
+    /// `RAFI_DRAND_MOCK` (`1`, `true`, `yes` or `on`, as the app reads its own
+    /// flags), `RAFI_DRAND_LEAD_SECS` and `RAFI_DRAND_TIMEOUT_SECS`. Anything
+    /// missing is the default; a number that doesn't parse is refused, named,
+    /// as every numeric variable of Rafi's is (a typo must not quietly become
+    /// a 6-second lead).
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
+        let defaults = Self::default();
+        let number = |name: &str, default: u64| -> anyhow::Result<u64> {
+            match get(name) {
+                None => Ok(default),
+                Some(v) => v
+                    .trim()
+                    .parse()
+                    .map_err(|_| anyhow!("not a number: {name}={v:?}")),
+            }
+        };
+        Ok(Self {
+            relays: get("RAFI_DRAND_RELAYS")
+                .map(|v| {
+                    v.split(',')
+                        .map(|s| s.trim().to_owned())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .filter(|relays| !relays.is_empty())
+                .unwrap_or(defaults.relays),
+            mock: get("RAFI_DRAND_MOCK")
+                .is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes" | "on")),
+            lead_secs: number("RAFI_DRAND_LEAD_SECS", defaults.lead_secs)?,
+            timeout_secs: number("RAFI_DRAND_TIMEOUT_SECS", defaults.timeout_secs)?,
+        })
+    }
+
+    /// The chain draws use.
+    pub fn chain(&self) -> anyhow::Result<ChainInfo> {
+        if !self.mock {
+            return Ok(chains::quicknet());
+        }
+        #[cfg(feature = "mock-drand")]
+        return Ok(mock_chain().chain().clone());
+        #[cfg(not(feature = "mock-drand"))]
+        bail!("drand mock mode is not available in this build (enable the `mock-drand` feature)");
+    }
+
+    /// The configured relays.
+    pub fn parsed_relays(&self) -> anyhow::Result<Vec<Relay>> {
+        self.relays
+            .iter()
+            .map(|r| r.trim())
+            .filter(|r| !r.is_empty())
+            .map(|r| {
+                r.parse()
+                    .with_context(|| format!("invalid drand relay {r:?}"))
+            })
+            .collect()
+    }
+
+    /// Checks the settings against the chain.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let chain = self.chain()?;
+        // Draw events record only the signature, so chained schemes cannot be replayed.
+        ensure!(
+            !chain.scheme().is_chained(),
+            "chained drand schemes are not supported"
+        );
+        let period = chain.period().as_secs();
+        if !self.mock && self.lead_secs < period {
+            bail!(
+                "drand lead_secs must be at least the chain period ({period}s), or the committed round may already be public"
+            );
+        }
+        ensure!(self.timeout_secs > 0, "drand timeout_secs must be positive");
+        if !self.mock {
+            ensure!(
+                !self.parsed_relays()?.is_empty(),
+                "no drand relays configured"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Fetches and verifies beacons for Rafi's configured chain.
+#[derive(Clone, Debug)]
+pub struct DrandClient {
+    cfg: DrandConfig,
+    client: Client,
+}
+
+/// Builds a [`DrandClient`]: the settings, and the host's HTTP for the relays.
+#[must_use]
+pub struct DrandClientBuilder {
+    cfg: DrandConfig,
+    transport: Option<Arc<dyn HttpTransport>>,
+    /// The mock chain asked of the relays over HTTP, not served in process.
+    mock_over_http: bool,
+}
+
+impl DrandClientBuilder {
+    /// Asks the relays through `transport`. Required unless the settings ask
+    /// for the mock chain, which is served in process (and ignores it).
+    pub fn http_transport(mut self, transport: impl HttpTransport) -> Self {
+        self.transport = Some(Arc::new(transport));
+        self
+    }
+
+    /// With the mock chain, asks the configured relays for it over HTTP
+    /// instead of serving it in process: tests of the fetching itself (a
+    /// relay down, a relay failing and then answering) against a local relay
+    /// that signs with the mock chain's key. Needs the `mock-drand` feature.
+    #[cfg(feature = "mock-drand")]
+    pub fn mock_over_http(mut self) -> Self {
+        self.mock_over_http = true;
+        self
+    }
+
+    /// Validates the configuration and builds the client (fails at startup on
+    /// bad settings, a mock request without the `mock-drand` feature, relays
+    /// without a transport, or an unverifiable chain).
+    pub fn build(self) -> anyhow::Result<DrandClient> {
+        let Self {
+            cfg,
+            transport,
+            mock_over_http,
+        } = self;
+        cfg.validate()?;
+        let chain = cfg.chain()?;
+        let builder = Client::builder(chain)
+            .strategy(Strategy::default())
+            .request_timeout(Duration::from_secs(5))
+            .user_agent("rafi (+https://github.com/sagikazarmark/rafi)");
+        let client = if cfg.mock && !mock_over_http {
+            #[cfg(feature = "mock-drand")]
+            {
+                builder.test_transport(mock_chain()).build()?
+            }
+            #[cfg(not(feature = "mock-drand"))]
+            unreachable!("validate rejects mock without the feature")
+        } else {
+            let transport =
+                transport.ok_or_else(|| anyhow!("no HTTP transport for the drand relays"))?;
+            builder
+                .relays(cfg.parsed_relays()?)
+                .http_transport(transport)
+                .build()?
+        };
+        Ok(DrandClient { cfg, client })
+    }
+}
+
+impl DrandClient {
+    /// A client for `cfg`; [`DrandClientBuilder::http_transport`] says how the
+    /// relays are asked.
+    pub fn builder(cfg: DrandConfig) -> DrandClientBuilder {
+        DrandClientBuilder {
+            cfg,
+            transport: None,
+            mock_over_http: false,
+        }
+    }
+
+    /// A client without HTTP: only the mock chain builds this way (tests and
+    /// development). Anything with relays needs [`DrandClient::builder`].
+    pub fn new(cfg: DrandConfig) -> anyhow::Result<Self> {
+        Self::builder(cfg).build()
+    }
+
+    pub fn config(&self) -> &DrandConfig {
+        &self.cfg
+    }
+
+    pub fn chain(&self) -> &ChainInfo {
+        self.client.chain()
+    }
+
+    pub fn chain_hash(&self) -> ChainHash {
+        self.client.chain().hash()
+    }
+
+    pub fn schedule(&self) -> Schedule {
+        self.client.chain().schedule()
+    }
+
+    /// The underlying `drand` client (e.g. for `restate_drand::Drand`).
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    /// The round a draw starting at `now_unix` commits to
+    /// ([`Schedule::commit_round`], the same rule as the Restate engine's), and
+    /// when it is due (Unix seconds).
+    pub fn target_round(&self, now_unix: u64) -> (u64, u64) {
+        let schedule = self.schedule();
+        let now = UnixTime::from_secs(i64::try_from(now_unix).unwrap_or(i64::MAX));
+        let round = schedule.commit_round(now, Duration::from_secs(self.cfg.lead_secs));
+        let due = schedule
+            .round_time(round)
+            .and_then(|t| u64::try_from(t.as_secs()).ok())
+            .unwrap_or_default();
+        (round, due)
+    }
+
+    /// Waits until `round` is due, then fetches it for up to `timeout_secs`
+    /// (the same budget the Restate engine retries for after its durable sleep).
+    /// The clock is drand's [`SystemClock`] (`Date.now()` on wasm, where
+    /// `std::time::SystemTime` panics).
+    pub async fn wait_for(&self, round: u64) -> Result<VerifiedBeacon, FetchError> {
+        let until_due = self
+            .schedule()
+            .round_time(round)
+            .map(|due| due.saturating_duration_since(SystemClock.now()))
+            .unwrap_or_default();
+        let timeout = until_due + Duration::from_secs(self.cfg.timeout_secs);
+        self.client.wait_for(round, timeout).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ::drand::client::ReqwestTransport;
+
+    use super::*;
+
+    /// A client over relays (none is asked in these tests).
+    fn with_relays(cfg: DrandConfig) -> anyhow::Result<DrandClient> {
+        DrandClient::builder(cfg)
+            .http_transport(ReqwestTransport::default())
+            .build()
+    }
+
+    #[test]
+    fn config_from_flat_variables() {
+        let vars = |name: &str| match name {
+            "RAFI_DRAND_RELAYS" => Some(" v2:https://a , ,v1:https://b".to_owned()),
+            "RAFI_DRAND_MOCK" => Some("1".to_owned()),
+            "RAFI_DRAND_LEAD_SECS" => Some("9".to_owned()),
+            _ => None,
+        };
+        let cfg = DrandConfig::from_lookup(vars).unwrap();
+        assert_eq!(cfg.relays, ["v2:https://a", "v1:https://b"]);
+        assert!(cfg.mock);
+        assert_eq!(cfg.lead_secs, 9);
+        assert_eq!(cfg.timeout_secs, DrandConfig::default().timeout_secs);
+        let typo = DrandConfig::from_lookup(|name| {
+            (name == "RAFI_DRAND_TIMEOUT_SECS").then(|| "soon".to_owned())
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            typo.contains("RAFI_DRAND_TIMEOUT_SECS=\"soon\""),
+            "a typo is refused, not defaulted: {typo}"
+        );
+        assert_eq!(
+            DrandConfig::from_lookup(|_| None).unwrap(),
+            DrandConfig::default()
+        );
+        for (value, mock) in [("true", true), ("on", true), ("0", false), ("no", false)] {
+            let cfg = DrandConfig::from_lookup(|name| {
+                (name == "RAFI_DRAND_MOCK").then(|| value.to_owned())
+            })
+            .unwrap();
+            assert_eq!(cfg.mock, mock, "RAFI_DRAND_MOCK={value}");
+        }
+    }
+
+    #[test]
+    fn config_deserializes_with_defaults() {
+        let cfg: DrandConfig = serde_json::from_str(r#"{"lead_secs": 9}"#).unwrap();
+        assert_eq!(cfg.lead_secs, 9);
+        assert_eq!(cfg.relays, DrandConfig::default().relays);
+        assert!(
+            serde_json::from_str::<DrandConfig>(r#"{"lead": 9}"#).is_err(),
+            "unknown fields are rejected"
+        );
+    }
+
+    #[test]
+    fn relays_parse_with_and_without_prefix() {
+        let cfg = DrandConfig {
+            relays: vec![
+                "https://drand.cloudflare.com".into(),
+                " v2:https://api.drand.sh/".into(),
+                "".into(),
+            ],
+            ..DrandConfig::default()
+        };
+        let relays = cfg.parsed_relays().unwrap();
+        assert_eq!(
+            relays.len(),
+            2,
+            "empty entries (a trailing comma) are ignored"
+        );
+        assert_eq!(relays[0].to_string(), "v1:https://drand.cloudflare.com");
+        assert_eq!(relays[1].to_string(), "v2:https://api.drand.sh");
+        assert!(with_relays(cfg.clone()).is_ok());
+        assert!(
+            DrandClient::new(cfg).is_err(),
+            "relays need the host's HTTP transport"
+        );
+    }
+
+    #[test]
+    fn real_chains_need_a_lead_of_at_least_one_period() {
+        for lead in [0, 1, 2] {
+            let cfg = DrandConfig {
+                lead_secs: lead,
+                ..DrandConfig::default()
+            };
+            assert!(cfg.validate().is_err(), "lead {lead}");
+        }
+        assert!(DrandConfig::default().validate().is_ok());
+        let cfg = DrandConfig {
+            relays: vec!["ftp://nope".into()],
+            ..DrandConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn quicknet_target_round_is_lead_seconds_ahead() {
+        let client = with_relays(DrandConfig::default()).unwrap();
+        let g = 1_692_803_367u64;
+        for now in g..g + 30 {
+            let (round, due) = client.target_round(now);
+            assert_eq!(round, (now + 6 - g) / 3 + 1);
+            assert!(due > now && due <= now + 6);
+        }
+    }
+
+    /// Both engines commit with [`Schedule::commit_round`]: the Restate engine
+    /// (`restate_drand::Drand::commit_round`) reads its clock in milliseconds,
+    /// the local engine ([`DrandClient::target_round`]) in whole seconds. Both
+    /// must pick the same round, and a due time not yet past, at any instant.
+    #[test]
+    fn both_engines_commit_to_the_same_round() {
+        let q = chains::quicknet();
+        let genesis_ms = q.genesis_time().as_secs() * 1000;
+        for lead_secs in [3u64, 6, 7] {
+            let client = with_relays(DrandConfig {
+                lead_secs,
+                ..DrandConfig::default()
+            })
+            .unwrap();
+            for offset_ms in (0..20_000).step_by(137) {
+                let now_ms = genesis_ms + 1_000_000_000 + offset_ms;
+                let restate = q.schedule().commit_round(
+                    UnixTime::from_millis(now_ms),
+                    Duration::from_secs(lead_secs),
+                );
+                let (local, due) = client.target_round(u64::try_from(now_ms / 1000).unwrap());
+                assert_eq!(local, restate, "lead {lead_secs}, now {now_ms} ms");
+                assert!(
+                    due * 1000 >= u64::try_from(now_ms).unwrap(),
+                    "a lead of a period or more commits to a round not out yet"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "mock-drand")]
+    #[tokio::test]
+    async fn mock_chain_serves_verified_past_rounds() {
+        let client = DrandClient::new(DrandConfig {
+            mock: true,
+            lead_secs: 0,
+            ..DrandConfig::default()
+        })
+        .unwrap();
+        assert!(client.chain_hash() != chains::QUICKNET_HASH);
+        assert_eq!(
+            rafi_raffle::drand::resolve_chain(&client.chain_hash()),
+            Some(client.chain().clone())
+        );
+        let b = client.wait_for(7).await.expect("past rounds are ready");
+        assert_eq!(b.chain_hash(), client.chain_hash());
+        assert_eq!(
+            mock_chain().chain().hash(),
+            client.chain_hash(),
+            "the mock chain is pinned"
+        );
+    }
+}

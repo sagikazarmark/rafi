@@ -1,0 +1,40 @@
+set default-list
+set ignore-comments
+
+# Assemble the static files Workers Assets serves: the web app bundle and the participant build, from their own build/, whose index.html the Workers compile in.
+assets:
+    {{ just_executable() }} ../web/ build
+    {{ just_executable() }} ../participant/ build
+
+    rm -rf worker-assets
+    mkdir -p worker-assets/participant
+
+    # The web app's files, but its index.html: compiled into the Worker, which serves it with its CSP.
+    cp -R ../web/build/public/. worker-assets/
+    rm worker-assets/index.html
+
+    # The participant's hashed assets and its fallback, but its index.html (the page's loader): compiled in too.
+    cp -R ../participant/build/public/assets worker-assets/participant/assets
+    cp ../participant/build/public/fallback.js worker-assets/participant/
+
+    # Cloudflare compresses at the edge: the precompressed variants are the native server's.
+    find worker-assets -type f \( -name '*.gz' -o -name '*.br' \) -delete
+
+    # Last: devenv takes _headers as the mark of a finished build.
+    cp _headers worker-assets/
+
+# Build the Worker as `wrangler deploy` builds it (`just build dev` as `wrangler dev --env dev` does).
+build features="":
+    worker-build --release {{ if features == "" { "" } else { "--features " + features } }}
+
+# Apply the D1 migrations to the local database.
+migrate:
+    wrangler d1 migrations apply rafi --local --env dev
+
+# Run the Worker at http://127.0.0.1:8787.
+dev: assets migrate
+    wrangler dev --env dev
+
+# Validate the production shape without deploying: the configuration, every binding, the bundle and the static files.
+dry-run:
+    wrangler deploy --dry-run

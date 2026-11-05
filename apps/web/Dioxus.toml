@@ -1,0 +1,45 @@
+[application]
+name = "rafi"
+default_platform = "web"
+asset_dir = "assets"
+
+[web.app]
+title = "Rafi"
+
+# Brotli next to the assets; `just build` adds gzip (the native server serves
+# whichever the browser accepts; Cloudflare compresses at the edge, and
+# apps/worker leaves both out of its files).
+[web]
+pre_compress = true
+
+[web.watcher]
+watch_path = ["src", "assets"]
+
+# `dx serve` serves the web app; everything the native server owns goes to it
+# (`PORT=8788 cargo run -p rafi --features dev`, see docs/development/getting-started.md).
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/api/"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/config.js"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/terms"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/privacy"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/healthz"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/j/"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/rules/"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/participant/"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:8788/.well-known/"

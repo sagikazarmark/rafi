@@ -1,0 +1,30 @@
+# Local only: drives rafi-cloudflare's Durable Object (see scenario.mjs).
+name = "rafi-cloudflare-check"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+
+[build]
+command = "worker-build --release"
+
+# The participant build's assets and fallback (scripts/workers-check.sh
+# copies them from apps/participant/build/public), served at /participant/;
+# the Worker serves its pow-worker.js.
+[assets]
+directory = "./site"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "rafi-cloudflare-check"
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "../../migrations/sqlite"
+
+[[durable_objects.bindings]]
+name = "RAFFLE_ROOM"
+class_name = "RaffleRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RaffleRoom"]
+
+# No RAFI_DO_JURISDICTION: workerd (wrangler dev) has no jurisdictions, and
+# unset is the plain namespace.

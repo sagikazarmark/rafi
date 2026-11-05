@@ -1,0 +1,93 @@
+//! The housekeeping run's reads and writes: finding live channels to end, and
+//! when the last run succeeded. Its erasure writes are [`retention`](crate::retention).
+
+use crate::{Db, Result};
+
+/// `meta`'s key for when housekeeping last succeeded.
+const LAST_OK: &str = "last_retention_ok_at";
+
+/// `meta`'s key for the last raffle housekeeping asked the engine to finish
+/// at the ceiling: the next run's asking starts after it.
+const LAST_FINISH: &str = "last_ceiling_finish";
+
+/// The raffles that finished at or before `finished_by` and still have live
+/// updates.
+pub async fn live_channels_due(db: &Db, finished_by: i64) -> Result<Vec<String>> {
+    let ids: Vec<(String,)> = db
+        .query(
+            "SELECT id FROM raffles
+             WHERE finished_at IS NOT NULL AND finished_at <= ? AND live_ended_at IS NULL",
+        )
+        .bind(finished_by)
+        .all()
+        .await?;
+    Ok(ids.into_iter().map(|(id,)| id).collect())
+}
+
+/// Records that the raffle's live updates ended at `now`, unless they already had.
+pub async fn live_ended(db: &Db, raffle_id: &str, now: i64) -> Result<()> {
+    db.query("UPDATE raffles SET live_ended_at = ? WHERE id = ? AND live_ended_at IS NULL")
+        .bind(now)
+        .bind(raffle_id)
+        .run()
+        .await
+        .map(|_| ())
+}
+
+/// Since when there has been anything for housekeeping to do: when the
+/// oldest raffle was created (unix seconds), if any.
+pub async fn oldest_raffle_at(db: &Db) -> Result<Option<i64>> {
+    let (at,): (Option<i64>,) = db
+        .query("SELECT MIN(created_at) FROM raffles")
+        .one()
+        .await?;
+    Ok(at)
+}
+
+/// When the last run succeeded (unix seconds), if ever.
+pub async fn last_ok(db: &Db) -> Result<Option<i64>> {
+    let row: Option<(String,)> = db
+        .query("SELECT value FROM meta WHERE key = ?")
+        .bind(LAST_OK)
+        .optional()
+        .await?;
+    Ok(row.and_then(|(v,)| v.parse().ok()))
+}
+
+/// Records that a run succeeded at `now`.
+pub async fn record_ok(db: &Db, now: i64) -> Result<()> {
+    db.query(
+        "INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(LAST_OK)
+    .bind(now.to_string())
+    .run()
+    .await
+    .map(|_| ())
+}
+
+/// The last raffle a run asked the engine to finish at the ceiling (its
+/// ID), if any.
+pub async fn last_finish_asked(db: &Db) -> Result<Option<String>> {
+    let row: Option<(String,)> = db
+        .query("SELECT value FROM meta WHERE key = ?")
+        .bind(LAST_FINISH)
+        .optional()
+        .await?;
+    Ok(row.map(|(v,)| v))
+}
+
+/// Records that a run asked the engine to finish raffle `id` at the
+/// ceiling, the last it asked about.
+pub async fn record_finish_asked(db: &Db, id: &str) -> Result<()> {
+    db.query(
+        "INSERT INTO meta (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(LAST_FINISH)
+    .bind(id)
+    .run()
+    .await
+    .map(|_| ())
+}

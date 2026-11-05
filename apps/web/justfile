@@ -1,0 +1,25 @@
+set default-list
+set ignore-comments
+
+buildDir := "build"
+
+# Compile the stylesheet, for a plain cargo build or clippy (dx compiles it itself).
+css:
+    tailwindcss -i tailwind.css -o assets/tailwind.css --minify
+
+build out=buildDir:
+    rm -rf {{ out }}/public/assets
+
+    dx bundle --platform web --release --locked --debug-symbols false --out-dir {{ out }}
+
+    # dx's pre_compress (Dioxus.toml) writes brotli for every asset: add gzip next to it.
+    for br in {{ out }}/public/assets/*.br; do gzip -9 -k -n -f "${br%.br}"; done
+
+# Serve with hot reload at http://127.0.0.1:8787, with the server on :8788.
+#
+# `just serve 0.0.0.0` for phones on the LAN
+serve addr="127.0.0.1":
+    dx serve --port 8787 --addr {{ addr }}
+
+clean:
+    rm -rf {{ buildDir }}

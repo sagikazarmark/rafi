@@ -1,0 +1,224 @@
+//! Starting the draw: freezing the entrant list, writing the raffle's
+//! manifest from it, and handing that to the raffle engine. (The freeze
+//! fixes the entrants and the prizes; "commit" is the raffle's word, for a
+//! draw committing to a drand round.)
+//!
+//! The store has no interactive transactions, so this is a protocol of
+//! separate writes, each guarded by the state it expects and safe to repeat:
+//! close registration (the raffle freezes), read the now-fixed entrant list,
+//! store the manifest (or [unfreeze](crate::RaffleState::unfreeze) when
+//! nobody is left), open the raffle. A raffle without registration freezes
+//! from Published (`Ready`): there was nothing to close. [`next`] says which step a raffle is
+//! at, so pressing "start" again picks up where an attempt stopped.
+
+use crate::RaffleState;
+
+/// The step starting the draw takes next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// Freeze the raffle (from `from`), then
+    /// [`WriteManifest`](Self::WriteManifest) with `unfreeze_to: from`. Needs
+    /// entrants and prizes ([`ready`]).
+    Freeze { from: RaffleState },
+    /// Frozen without a manifest (a freeze stopped between its steps):
+    /// build the manifest from the fixed entrant list and store it, or go
+    /// back to `unfreeze_to` if nobody is left.
+    WriteManifest { unfreeze_to: RaffleState },
+    /// The manifest is stored, but the engine hasn't opened the raffle: hand
+    /// it the stored manifest again (opening is idempotent).
+    Resend,
+    /// The engine has the raffle: nothing left to do.
+    Started,
+}
+
+/// Why the draw can't start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Not in a state the draw starts from.
+    State(RaffleState),
+    /// Nobody to draw from.
+    NoEntrants,
+    /// Nothing to draw for.
+    NoPrizes,
+    /// More items than [`crate::settings::MAX_ITEMS`].
+    TooManyItems,
+    /// Fake entrants are on the list of a raffle that isn't in test mode.
+    FakeEntrants,
+}
+
+/// The next step for a raffle in `state`, with or without registration
+/// (`registration`), a stored manifest (`has_manifest`) and an opened raffle
+/// (`opened`).
+pub fn next(
+    state: RaffleState,
+    registration: bool,
+    has_manifest: bool,
+    opened: bool,
+) -> Result<Start, Refusal> {
+    use crate::Command;
+    match state {
+        from if from.apply(Command::Freeze, registration).is_some() => Ok(Start::Freeze { from }),
+        // Which state it froze from isn't stored: with registration, it may
+        // reopen from Closed whatever it was; without, Published is where
+        // its next freeze starts (one switched off in Closed included).
+        RaffleState::Frozen if !opened && !has_manifest => Ok(Start::WriteManifest {
+            unfreeze_to: if registration {
+                RaffleState::Closed
+            } else {
+                RaffleState::Ready
+            },
+        }),
+        RaffleState::Frozen if !opened => Ok(Start::Resend),
+        RaffleState::Frozen | RaffleState::Drawing => Ok(Start::Started),
+        s => Err(Refusal::State(s)),
+    }
+}
+
+/// Whether a raffle with `entrants` active entrants and `items` items
+/// (prize copies) has something to draw.
+pub fn ready(entrants: usize, items: usize) -> Result<(), Refusal> {
+    if items == 0 {
+        return Err(Refusal::NoPrizes);
+    }
+    if items > crate::settings::MAX_ITEMS as usize {
+        return Err(Refusal::TooManyItems);
+    }
+    if entrants == 0 {
+        return Err(Refusal::NoEntrants);
+    }
+    Ok(())
+}
+
+/// Whether a raffle in test mode or not (`test_mode`), with `fakes` fake
+/// entrants, may freeze: fakes only ever go into a rehearsal's manifest.
+/// (Switching test mode off removes them; this holds the line if any are
+/// left all the same.)
+pub fn genuine(test_mode: bool, fakes: usize) -> Result<(), Refusal> {
+    if !test_mode && fakes > 0 {
+        return Err(Refusal::FakeEntrants);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use RaffleState as S;
+
+    #[test]
+    fn freezes_from_open_or_closed() {
+        assert_eq!(
+            next(S::Open, true, false, false),
+            Ok(Start::Freeze { from: S::Open })
+        );
+        assert_eq!(
+            next(S::Closed, true, false, false),
+            Ok(Start::Freeze { from: S::Closed })
+        );
+    }
+
+    #[test]
+    fn freezes_from_published_without_registration() {
+        assert_eq!(
+            next(S::Ready, false, false, false),
+            Ok(Start::Freeze { from: S::Ready })
+        );
+        assert_eq!(
+            next(S::Ready, true, false, false),
+            Err(Refusal::State(S::Ready)),
+            "with registration, it opens first"
+        );
+        // Switched off while closed: it freezes from there.
+        assert_eq!(
+            next(S::Closed, false, false, false),
+            Ok(Start::Freeze { from: S::Closed })
+        );
+    }
+
+    #[test]
+    fn picks_up_where_an_attempt_stopped() {
+        assert_eq!(
+            next(S::Frozen, true, false, false),
+            Ok(Start::WriteManifest {
+                unfreeze_to: S::Closed
+            })
+        );
+        assert_eq!(
+            next(S::Frozen, false, false, false),
+            Ok(Start::WriteManifest {
+                unfreeze_to: S::Ready
+            })
+        );
+        assert_eq!(next(S::Frozen, true, true, false), Ok(Start::Resend));
+        assert_eq!(next(S::Frozen, true, true, true), Ok(Start::Started));
+        assert_eq!(next(S::Drawing, true, true, true), Ok(Start::Started));
+    }
+
+    /// Every state, with and without registration, a manifest and an opened
+    /// raffle: the step, or the refusal. Wherever it unfreezes to, the
+    /// lifecycle can unfreeze to.
+    #[test]
+    fn every_combination() {
+        for s in S::ALL {
+            for registration in [false, true] {
+                for has_manifest in [false, true] {
+                    for opened in [false, true] {
+                        let got = next(s, registration, has_manifest, opened);
+                        let want = match s {
+                            S::Open | S::Closed => Ok(Start::Freeze { from: s }),
+                            S::Ready if !registration => Ok(Start::Freeze { from: s }),
+                            S::Frozen if opened => Ok(Start::Started),
+                            S::Frozen if has_manifest => Ok(Start::Resend),
+                            S::Frozen => Ok(Start::WriteManifest {
+                                unfreeze_to: if registration { S::Closed } else { S::Ready },
+                            }),
+                            S::Drawing => Ok(Start::Started),
+                            _ => Err(Refusal::State(s)),
+                        };
+                        assert_eq!(
+                            got, want,
+                            "{s:?}, registration {registration}, manifest {has_manifest}, opened {opened}"
+                        );
+                        if let Ok(
+                            Start::Freeze { from: to } | Start::WriteManifest { unfreeze_to: to },
+                        ) = got
+                        {
+                            assert_eq!(
+                                S::Frozen.unfreeze(to),
+                                Some(to),
+                                "{s:?} unfreezes to {to:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_elsewhere() {
+        for s in [S::Draft, S::Ready, S::Finished, S::Purged] {
+            assert_eq!(next(s, true, false, false), Err(Refusal::State(s)));
+        }
+        for s in [S::Draft, S::Finished, S::Purged] {
+            assert_eq!(next(s, false, false, false), Err(Refusal::State(s)));
+        }
+    }
+
+    #[test]
+    fn needs_prizes_then_entrants() {
+        assert_eq!(ready(0, 0), Err(Refusal::NoPrizes));
+        assert_eq!(ready(0, 1), Err(Refusal::NoEntrants));
+        assert_eq!(ready(1, 1), Ok(()));
+        let max = crate::settings::MAX_ITEMS as usize;
+        assert_eq!(ready(1, max), Ok(()));
+        assert_eq!(ready(1, max + 1), Err(Refusal::TooManyItems));
+    }
+
+    #[test]
+    fn fakes_freeze_only_in_test_mode() {
+        assert_eq!(genuine(true, 3), Ok(()));
+        assert_eq!(genuine(false, 0), Ok(()));
+        assert_eq!(genuine(false, 1), Err(Refusal::FakeEntrants));
+    }
+}

@@ -1,0 +1,107 @@
+//! Random identifiers, codes and tokens (all from the OS CSPRNG).
+
+use sha2::{Digest, Sha256};
+
+pub fn random_bytes<const N: usize>() -> [u8; N] {
+    let mut buf = [0u8; N];
+    getrandom::fill(&mut buf).expect("OS randomness is available");
+    buf
+}
+
+/// A random 128-bit lowercase hex ID.
+pub fn id() -> String {
+    hex::encode(random_bytes::<16>())
+}
+
+/// A short human-friendly code (join codes, claim codes) of `len` (at most
+/// 16) characters.
+pub fn code(len: usize) -> String {
+    crate::codes::from_bytes(&random_bytes::<16>(), len)
+}
+
+/// A claim code that isn't in `taken`, which then holds it: 4 characters
+/// (31⁴, about 920 000), or 6 if a few tries don't find a free one. Unique
+/// within a raffle, so a code names one entrant at the stage; `taken` is the
+/// raffle's codes, read once for any number of new entrants.
+pub fn code_besides(taken: &mut std::collections::HashSet<String>) -> String {
+    let mut tries = 0;
+    loop {
+        let code = code(if tries < 50 { 4 } else { 6 });
+        tries += 1;
+        if taken.insert(code.clone()) {
+            return code;
+        }
+    }
+}
+
+/// A random generated display name, like "Brave Otter"
+/// ([`rafi_lifecycle::entrant::generated_name`]).
+pub fn generated_name() -> String {
+    rafi_lifecycle::entrant::generated_name(u64::from_le_bytes(random_bytes::<8>()))
+}
+
+/// A random generated display name that isn't in `taken`, if one turns up in a
+/// few tries; otherwise one that is (entrants are told apart by their ID).
+pub fn generated_name_besides(taken: &std::collections::HashSet<String>) -> String {
+    let mut name = generated_name();
+    for _ in 0..20 {
+        if !taken.contains(&name) {
+            break;
+        }
+        name = generated_name();
+    }
+    name
+}
+
+/// A URL slug derived from a title plus a random suffix.
+pub fn slug(title: &str) -> String {
+    // Accents folded in any language ("Málaga Ünnep" is "malaga-unnep"),
+    // anything else not ASCII a dash.
+    let mut base: String = rafi_lifecycle::names::fold_accents(&title.to_lowercase())
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    while base.contains("--") {
+        base = base.replace("--", "-");
+    }
+    let base = base.trim_matches('-');
+    let base: String = base.chars().take(32).collect();
+    let suffix = code(4).to_lowercase();
+    if base.is_empty() {
+        suffix
+    } else {
+        format!("{}-{suffix}", base.trim_end_matches('-'))
+    }
+}
+
+/// A secret token for the participant cookie.
+pub fn token() -> String {
+    hex::encode(random_bytes::<16>())
+}
+
+pub fn token_hash(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn claim_codes_are_unique_within_a_raffle() {
+        let mut taken = std::collections::HashSet::new();
+        let codes: Vec<String> = (0..3000).map(|_| super::code_besides(&mut taken)).collect();
+        assert_eq!(taken.len(), 3000, "every one new");
+        assert!(codes.iter().all(|c| taken.contains(c)));
+    }
+
+    #[test]
+    fn slugs() {
+        let s = super::slug("KCD Budapest Meetup #3!");
+        assert!(s.starts_with("kcd-budapest-meetup-3-"), "{s}");
+        let s = super::slug("Árvíztűrő tükörfúrógép");
+        assert!(s.starts_with("arvizturo-tukorfurogep-"), "{s}");
+        assert_eq!(super::slug("!!!").len(), 4);
+        // Any language's accents, not one's.
+        let s = super::slug("Málaga Ünnep Łódź Çağrı");
+        assert!(s.starts_with("malaga-unnep-odz-cagr"), "{s}");
+    }
+}
