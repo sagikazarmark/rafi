@@ -212,11 +212,6 @@
     }
   }
 
-  /* index.html's loading screen, until the app renders. */
-  #main:not(:empty) + #boot {
-    display: none;
-  }
-
   .hover-wiggle:hover {
     animation: var(--animate-wiggle);
   }
@@ -244,6 +239,12 @@
     animation: burst 1.8s ease-out forwards;
     transform: rotate(calc(var(--i) * 15deg));
   }
+}
+
+/* index.html's loading screen, until the app renders. Unlayered: #boot carries the `grid` utility, and
+   any layered rule (even an ID selector in `components`) loses to the `utilities` layer. */
+#main:not(:empty) + #boot {
+  display: none;
 }
 
 @keyframes bounce-dot {
