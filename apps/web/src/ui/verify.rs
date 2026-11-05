@@ -82,6 +82,7 @@ pub fn Verify(slug: String) -> Element {
                 div { class: "mx-auto flex max-w-5xl items-center gap-2 px-4 py-2.5",
                     Brand {}
                     span { class: "flex-1" }
+                    Link { class: "btn btn-ghost btn-sm", to: super::Route::Fairness {}, "How it works" }
                     ThemeToggle {}
                 }
             }

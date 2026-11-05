@@ -9,13 +9,14 @@ Every URL a Rafi app serves. All of them are on one origin.
 | `/admin`, `/admin/r/<id>` | The organizer's admin: raffles, prizes, people, the draw console | Organizers (Clerk login) |
 | `/s/<slug>` | The projector screen | Public |
 | `/v/<slug>` | The verification page. It re-runs every draw in the browser. | Public, once the list is frozen |
+| `/fairness` | How fairness works: the draw explained in plain words, with diagrams. The landing page and the verification page link it. | Public |
 | `/j/<CODE>` | The participant page: the join form, then the entrant's own card. Server-rendered. `POST` joins. Without registration, no form and no join: the organizer adds the people taking part, and the page links the rules, the notice and, once frozen, the verification page. | Public (the entry lives in a cookie) |
 | `/rules/<slug>` | The raffle's rules | Public |
 | `/privacy/<slug>` | The raffle's privacy notice, built in: the organizer as controller, the erasure dates, the operator as processor and how the software handles the data, the organizer's own text | Public |
 | `/privacy` | The operator's own privacy notice (from `privacy.md`), or that they haven't provided one | Public |
 | `/terms` | The operator's terms, with the data processing agreement (from `terms.md`), which organizers accept by using the service; or that they haven't provided any | Public |
 
-The web app (`rafi-web`) serves `/admin`, `/s/…` and `/v/…` as a single-page app: the server answers every path it
+The web app (`rafi-web`) serves `/admin`, `/s/…`, `/v/…` and `/fairness` as a single-page app: the server answers every path it
 doesn't own with the web app's `index.html` (`GET` only; a miss under `/assets/`, `/participant/`, `/api/` or `/legal/`
 is a 404). The server (`rafi-server`) renders `/j/…`, `/rules/…`, `/privacy/…`, `/privacy` and `/terms`.
 

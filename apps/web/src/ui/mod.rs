@@ -2,6 +2,7 @@
 
 mod admin;
 pub mod dates;
+mod fairness;
 mod forms;
 mod live;
 mod problem;
@@ -14,6 +15,7 @@ use dioxus_icons::lucide::{
 };
 
 use admin::{AdminHome, RaffleAdmin};
+use fairness::Fairness;
 use screen::Screen;
 use verify::Verify;
 
@@ -77,6 +79,8 @@ pub enum Route {
     Screen { slug: String },
     #[route("/v/:slug")]
     Verify { slug: String },
+    #[route("/fairness")]
+    Fairness {},
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
 }
@@ -202,7 +206,7 @@ fn Home() -> Element {
                                 Ticket { class: "size-5" }
                                 "Start a raffle"
                             }
-                            a { class: "btn btn-ghost btn-lg", href: "https://drand.love", target: "_blank",
+                            Link { class: "btn btn-ghost btn-lg", to: Route::Fairness {},
                                 ShieldCheck { class: "size-5" }
                                 "How fairness works"
                             }
@@ -665,5 +669,18 @@ mod tests {
         let home = render("/", true);
         assert!(home.contains(r#"href="/admin/""#), "{home}");
         assert!(!home.contains(OPEN_AT_THE_TOP), "{home}");
+    }
+
+    /// "How fairness works" on the home page is the page here, not drand's
+    /// site; it explains the draw and links on to the admin.
+    #[test]
+    fn the_home_page_explains_fairness_here() {
+        let home = render("/", false);
+        assert!(home.contains(r#"href="/fairness""#), "{home}");
+
+        let fairness = render("/fairness", false);
+        assert!(fairness.contains("Nobody picks the winner."), "{fairness}");
+        assert!(fairness.contains("Check every draw yourself"), "{fairness}");
+        assert!(fairness.contains(r#"href="/admin/""#), "{fairness}");
     }
 }
