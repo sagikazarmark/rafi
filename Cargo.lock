@@ -2044,9 +2044,9 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "drand"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a4135d94c872520fd9bd42bfe24f0905b63492cb5f4417f67b6e035250331a8"
+checksum = "4abbd9cab41e2828d432d44efcb54f7edf0d954352c410e2d35fd62d056da170"
 dependencies = [
  "ark-bls12-381",
  "ark-ec",
@@ -4882,7 +4882,7 @@ dependencies = [
  "rafi-live-server",
  "rafi-raffle",
  "rafi-store",
- "restate-sdk 0.12.1",
+ "restate-sdk",
  "serde_json",
  "tracing",
  "tracing-subscriber",
@@ -4938,7 +4938,7 @@ dependencies = [
  "rafi-engine",
  "rafi-engine-restate",
  "rafi-store",
- "restate-sdk 0.12.1",
+ "restate-sdk",
  "tower-worker-fetch",
  "worker",
 ]
@@ -4973,7 +4973,7 @@ dependencies = [
  "reqwest 0.13.5",
  "restate-drand",
  "restate-e2e-harness",
- "restate-sdk 0.12.1",
+ "restate-sdk",
  "serde_json",
  "tokio",
  "tracing",
@@ -5061,8 +5061,8 @@ dependencies = [
  "rafi-engine-restate",
  "rafi-store",
  "restate-config",
- "restate-ext 0.4.0",
- "restate-sdk 0.12.1",
+ "restate-ext",
+ "restate-sdk",
  "serde",
  "tokio",
  "tracing",
@@ -5096,7 +5096,7 @@ dependencies = [
  "rafi-raffle",
  "rafi-store",
  "restate-e2e-harness",
- "restate-sdk 0.12.1",
+ "restate-sdk",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -5444,22 +5444,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3b98d521afbfe3458e8f1dca3a1fc85edb5dc78015f7e9b6b6d12125f80edd3"
 dependencies = [
  "humantime-serde",
- "restate-sdk 0.13.0",
+ "restate-sdk",
  "serde",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "restate-drand"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef4e8b1747b6be5a0e99534393641ab8ff27100ef75a6c2deffdc6736e47492"
+checksum = "5b4388909bdac208160a50e2a0d07f806ace772ff8ef3043e201bdac16dd3ab0"
 dependencies = [
  "anyhow",
  "drand",
  "getrandom 0.2.17",
- "restate-ext 0.3.0",
- "restate-sdk 0.12.1",
+ "restate-ext",
+ "restate-sdk",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -5474,7 +5474,7 @@ dependencies = [
  "hyper-util",
  "nix",
  "reqwest 0.13.5",
- "restate-sdk 0.13.0",
+ "restate-sdk",
  "rustix",
  "serde",
  "serde_json",
@@ -5483,21 +5483,11 @@ dependencies = [
 
 [[package]]
 name = "restate-ext"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67913c01ef69d826f82a10880ef31beaa804af366598f7d87531b800085ff796"
-dependencies = [
- "restate-sdk 0.12.1",
- "web-time",
-]
-
-[[package]]
-name = "restate-ext"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ef56ac8d1e836f4bd67eae8c8e6a21d5ade86e6e52090d753fea19007c6fb3"
 dependencies = [
- "restate-sdk 0.13.0",
+ "restate-sdk",
  "tokio",
  "tracing",
  "web-time",
@@ -5505,8 +5495,8 @@ dependencies = [
 
 [[package]]
 name = "restate-sdk"
-version = "0.12.1"
-source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea#91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea"
+version = "0.13.0"
+source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=b20d2050efbb762c3737a96cf44f7fd9c1807c4e#b20d2050efbb762c3737a96cf44f7fd9c1807c4e"
 dependencies = [
  "bytes",
  "futures",
@@ -5523,8 +5513,8 @@ dependencies = [
  "pin-project-lite",
  "prettyplease",
  "regress 0.10.5",
- "restate-sdk-macros 0.12.1",
- "restate-sdk-shared-core 7.0.3",
+ "restate-sdk-macros",
+ "restate-sdk-shared-core",
  "rustls",
  "serde",
  "serde_json",
@@ -5538,75 +5528,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "restate-sdk"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32d1aec0c891f86648ad71dc8696c9366b4fe5925570939b8a2558e74810d14b"
-dependencies = [
- "bytes",
- "futures",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "jsonptr",
- "percent-encoding",
- "pin-project-lite",
- "prettyplease",
- "regress 0.10.5",
- "restate-sdk-macros 0.13.0",
- "restate-sdk-shared-core 8.2.0",
- "serde",
- "serde_json",
- "syn 2.0.119",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "typify",
-]
-
-[[package]]
 name = "restate-sdk-macros"
-version = "0.12.1"
-source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea#91bf758b8f6d8fc8eb91fb63524f01dbe74b2bea"
+version = "0.13.0"
+source = "git+https://github.com/sagikazarmark/restate-sdk-rust?rev=b20d2050efbb762c3737a96cf44f7fd9c1807c4e#b20d2050efbb762c3737a96cf44f7fd9c1807c4e"
 dependencies = [
  "jiff",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "restate-sdk-macros"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3acd232e32159ca2007d8625c68171cd7b7db42a978c29475b47e3f115bb4db7"
-dependencies = [
- "jiff",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "restate-sdk-shared-core"
-version = "7.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4a8731358ce185d1c9663d3ac97414acf7c0d642e5724864ade03fcccb85134"
-dependencies = [
- "base64 0.22.1",
- "bs58",
- "bytes",
- "bytes-utils",
- "http",
- "jsonwebtoken",
- "pastey",
- "prost",
- "serde",
- "sha2 0.11.1",
- "strum 0.27.2",
- "thiserror 2.0.21",
- "tracing",
 ]
 
 [[package]]
