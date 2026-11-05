@@ -175,7 +175,7 @@ async fn the_join_page_and_the_notices_say_when_data_is_erased() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        notice.contains("Cloud Native Budapest is the data controller"),
+        notice.contains("Tech Meetup is the data controller"),
         "{notice}"
     );
     assert!(
@@ -258,7 +258,7 @@ async fn the_join_page_and_the_notices_say_when_data_is_erased() {
         "apart from the basis: {object}"
     );
     for said in [
-        "ask Cloud Native Budapest (dpo@example.com) to take you off",
+        "ask Tech Meetup (dpo@example.com) to take you off",
         "Before the list of entrants is frozen for the draw, you are removed, and stay out if the organizer adds the list again.",
         "After that, your name is hidden and your data is erased when the raffle is over",
         "only your anonymous ID stays in the draw, so it can still be verified",
@@ -722,7 +722,7 @@ async fn the_notice_without_the_optional_fields() {
         "{notice}"
     );
     assert!(
-        notice.contains("ask Cloud Native Budapest (hello@example.com) to take you off"),
+        notice.contains("ask Tech Meetup (hello@example.com) to take you off"),
         "the contact email, without a privacy contact: {notice}"
     );
     assert!(!notice.contains("From the organizer"), "{notice}");

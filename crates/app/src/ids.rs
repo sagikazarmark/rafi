@@ -95,8 +95,8 @@ mod tests {
 
     #[test]
     fn slugs() {
-        let s = super::slug("KCD Budapest Meetup #3!");
-        assert!(s.starts_with("kcd-budapest-meetup-3-"), "{s}");
+        let s = super::slug("Tech Meetup #3!");
+        assert!(s.starts_with("tech-meetup-3-"), "{s}");
         let s = super::slug("Árvíztűrő tükörfúrógép");
         assert!(s.starts_with("arvizturo-tukorfurogep-"), "{s}");
         assert_eq!(super::slug("!!!").len(), 4);

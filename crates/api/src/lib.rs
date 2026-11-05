@@ -995,12 +995,12 @@ mod tests {
 
     fn to_send(format: NameFormat) -> ToSend<'static> {
         ToSend {
-            title: "Cloud Native Budapest #12",
+            title: "Tech Meetup #12",
             event_date: "28 October 2026",
-            organizer: "Cloud Native Budapest",
+            organizer: "Tech Meetup",
             contact: "dpo@example.com",
-            rules_url: "https://rafi.example/rules/cnb-12",
-            privacy_url: "https://rafi.example/privacy/cnb-12",
+            rules_url: "https://rafi.example/rules/meetup-12",
+            privacy_url: "https://rafi.example/privacy/meetup-12",
             own_privacy_url: "",
             format,
         }
@@ -1010,9 +1010,9 @@ mod tests {
     fn the_paragraph_to_send() {
         assert_eq!(
             paragraph_to_send(&to_send(NameFormat::Full)),
-            "You're in the prize draw of Cloud Native Budapest #12 on 28 October 2026, run by Cloud Native Budapest with Rafi, as someone on our guest list. \
+            "You're in the prize draw of Tech Meetup #12 on 28 October 2026, run by Tech Meetup with Rafi, as someone on our guest list. \
              Your name is shown on the event screen and the public results page as your full name, like “Anna Kovács”. \
-             Rules: https://rafi.example/rules/cnb-12 · Privacy: https://rafi.example/privacy/cnb-12. \
+             Rules: https://rafi.example/rules/meetup-12 · Privacy: https://rafi.example/privacy/meetup-12. \
              Rather not take part? Tell dpo@example.com before the draw on 28 October 2026."
         );
         let initials = paragraph_to_send(&to_send(NameFormat::FirstInitial));
@@ -1027,7 +1027,7 @@ mod tests {
         p.own_privacy_url = "https://example.org/privacy";
         assert!(
             paragraph_to_send(&p).contains(
-                "Privacy: https://rafi.example/privacy/cnb-12 · Our privacy notice: https://example.org/privacy. Rather"
+                "Privacy: https://rafi.example/privacy/meetup-12 · Our privacy notice: https://example.org/privacy. Rather"
             ),
             "{}",
             paragraph_to_send(&p)

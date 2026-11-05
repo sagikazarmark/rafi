@@ -222,7 +222,7 @@ fn Home() -> Element {
                         div { class: "absolute -bottom-8 -right-4 size-32 rounded-full bg-secondary/30 blur-2xl" }
                         div { class: "ticket relative animate-float bg-primary p-8 text-primary-content shadow-xl",
                             p { class: "text-sm font-semibold uppercase tracking-widest opacity-80", "You won!" }
-                            p { class: "font-display text-4xl font-extrabold", "KCD Budapest ticket" }
+                            p { class: "font-display text-4xl font-extrabold", "Conference ticket" }
                             div { class: "my-5 border-t-2 border-dashed border-primary-content/40" }
                             div { class: "flex items-end justify-between",
                                 div {

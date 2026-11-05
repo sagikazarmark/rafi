@@ -6,11 +6,7 @@ use super::*;
 async fn full_raffle_flow() {
     let app = app().await;
     let router = routes(app.clone());
-    let raffle = setup_open(
-        &app,
-        &[("KCD Budapest ticket", 2), ("CNCF exam voucher", 1)],
-    )
-    .await;
+    let raffle = setup_open(&app, &[("Conference ticket", 2), ("Workshop voucher", 1)]).await;
     let code = raffle.join_code.clone();
     assert_eq!(code.len(), service::JOIN_CODE_LEN);
     assert!(code.bytes().all(|b| service::codes::ALPHABET.contains(&b)));
@@ -344,7 +340,7 @@ async fn the_evening_over_http() {
     let view_url = format!("/api/r/{}/view", raffle.slug);
 
     let (_, _, view) = get_json(&router, &view_url).await;
-    assert_eq!(view["organizer"], "Cloud Native Budapest", "{view}");
+    assert_eq!(view["organizer"], "Tech Meetup", "{view}");
     assert_eq!(
         view["privacy_url"],
         format!("{}/privacy/{}", app.policy.public_url, raffle.slug)

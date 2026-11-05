@@ -850,7 +850,7 @@ mod tests {
             }],
             "current": current, "draws": [], "last_failure": null, "manifest_hash": null,
             "server_now_ms": 0, "test_mode": false, "verifiable": true, "registration": true,
-            "organizer": "Cloud Native Budapest", "privacy_url": "https://rafi.example/privacy/meetup"
+            "organizer": "Tech Meetup", "privacy_url": "https://rafi.example/privacy/meetup"
         }))
         .unwrap()
     }
