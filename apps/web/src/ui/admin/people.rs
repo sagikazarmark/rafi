@@ -335,9 +335,11 @@ fn EntrantRow(
                     },
                 }
             }
-            td { class: "block py-1 text-sm text-base-content/70 empty:hidden sm:table-cell sm:py-3", "{e.email.clone().unwrap_or_default()}" }
-            td { class: "block py-1 empty:hidden sm:table-cell sm:py-3", if let Some(code) = &e.claim_code { span { class: "claim-code text-sm", "{code}" } } }
-            td { class: "block py-1 empty:hidden sm:table-cell sm:py-3",
+            // Empty cells are hidden only in the card layout: in the table
+            // they hold their column (`empty:` would outrank `sm:table-cell`).
+            td { class: "block py-1 text-sm text-base-content/70 max-sm:empty:hidden sm:table-cell sm:py-3", "{e.email.clone().unwrap_or_default()}" }
+            td { class: "block py-1 max-sm:empty:hidden sm:table-cell sm:py-3", if let Some(code) = &e.claim_code { span { class: "claim-code text-sm", "{code}" } } }
+            td { class: "block py-1 max-sm:empty:hidden sm:table-cell sm:py-3",
                 if status.len() > 1 {
                     div { class: "flex flex-col items-start gap-1",
                         for (text, class) in status.iter() { span { class: "badge badge-soft {class} whitespace-nowrap", "{text}" } }
