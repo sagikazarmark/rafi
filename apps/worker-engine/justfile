@@ -9,9 +9,8 @@ build:
 dry-run:
     wrangler deploy --dry-run
 
-# The Worker as a release ships it, into `out` (a release's engine/).
+# The Worker as a release ships it, into `out` (a release's engine/): the module and its WebAssembly (not worker-build's shim.mjs or package.json, which nothing deploys).
 artifact out: build
     rm -rf "{{ out }}"
     mkdir -p "{{ out }}"
-    cp -R build "{{ out }}/build"
-    rm -f "{{ out }}/build/.gitignore"
+    cp build/index.js build/index_bg.wasm "{{ out }}/"

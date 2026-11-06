@@ -162,8 +162,9 @@ organization that made them, stay with the development instance's accounts. Move
 ## What an installation is
 
 Nothing of an installation's is compiled in: one build serves every installation. A release's one asset,
-`worker.tar.gz`, built by `.github/workflows/artifact.yaml` and attested by `.github/workflows/release.yaml`, holds `VERSION`, `app/` (the app Worker
-and its static files), `engine/`, `live/`, `migrations/` (the D1 migrations) and `deploy.sh`
+`worker.tar.gz`, built by `.github/workflows/artifact.yaml` and attested by `.github/workflows/release.yaml`, holds `VERSION`, `app/` (the app Worker,
+`index.js` and `index_bg.wasm`, and its static files, `assets/`), `engine/` and `live/` (each Worker's `index.js` and
+`index_bg.wasm`), `migrations/` (the D1 migrations) and `deploy.sh`
 (`scripts/cloudflare-deploy.sh`), so a release deploys with its own logic ([Releasing](../development/releasing.md)).
 The installation is the operator's repository, created from the deploy template (a template repository, in the
 works; its configuration as a test fixture here: `testdata/cloudflare-installation`):
@@ -172,7 +173,7 @@ works; its configuration as a test fixture here: `testdata/cloudflare-installati
   when that file exists);
 - `wrangler.app.toml`, `wrangler.engine.toml`, `wrangler.live.toml`: the three Workers' shapes as this repository
   ships them (`apps/worker-app/wrangler.toml` and the others; `scripts/workers-check.sh` checks they agree),
-  pointed at `release/`, with the operator's database ID, the app's address (workers.dev, or a custom domain) and
+  pointed at `worker/` (`main = "worker/app/index.js"` and the others), with the operator's database ID, the app's address (workers.dev, or a custom domain) and
   Restate public key;
 - `legal/terms.md` and `legal/privacy.md`, the operator's documents if they provide them (either or both), which
   the deploy copies into the app's static files;
@@ -180,7 +181,7 @@ works; its configuration as a test fixture here: `testdata/cloudflare-installati
   `package-lock.json`, which pins them (the template's pins the wrangler the release was rehearsed with): the
   workflows install from it with `npm ci` and `deploy.sh` runs them with `npx -y`, which takes the installed ones;
 - `.dev.vars.example`: the app Worker's secrets, filled in as `.dev.vars` and set on the Worker once
-  (`wrangler secret bulk .dev.vars`), never committed (`.dev.vars` is git-ignored, as are `release/` and
+  (`wrangler secret bulk .dev.vars`), never committed (`.dev.vars` is git-ignored, as are `worker/` and
   `node_modules/`; wrangler also reads `.dev.vars` for `wrangler dev`, which an installation doesn't run);
 - `.github/workflows/deploy.yaml` and `restate-cleanup.yaml`;
 - `INSTALL.md` (the first deploy) and `README.md` (the rest).
@@ -251,7 +252,7 @@ CLI from the installation's `package-lock.json` first (`npm ci --no-audit --no-f
 commented out) for required reviewers or its secrets. Both start the same way: install the tools, read the version
 file (the release to download), `gh release download v<version>` of `worker.tar.gz`, `gh attestation verify` with
 `--signer-workflow github.com/<RAFI_REPOSITORY>/.github/workflows/release.yaml`, `--source-ref refs/tags/v<version>`
-and `--deny-self-hosted-runners`, and unpack it into `release/`.
+and `--deny-self-hosted-runners`, and unpack it into `worker/`.
 
 **`deploy.yaml`** runs on a push to `main` that changes `VERSION`, `VERSION.*`, `legal/**` or a `wrangler.*.toml`,
 and by hand (**Actions > Deploy > Run workflow**, `gh workflow run deploy.yaml`). Then its steps:
@@ -293,7 +294,7 @@ the run's artifact `deploy-json-<attempt>` (`cleanup-json-<attempt>`), kept 14 d
 
 ## What each subcommand does
 
-`release/deploy.sh <subcommand>`, from the installation's root, with the release unpacked into `release/`. Its
+`worker/deploy.sh <subcommand>`, from the installation's root, with the release unpacked into `worker/`. Its
 header ([`scripts/cloudflare-deploy.sh`](../../scripts/cloudflare-deploy.sh)) is the reference. Every subcommand
 first reads the release's `VERSION` and, but for `migrate`, the Workers' names from `wrangler deploy --dry-run` of
 each configuration for `CLOUDFLARE_ENV` ([above](#what-an-installation-is)); in short:
@@ -540,21 +541,21 @@ on the first one:
 
 ## From source
 
-Instead of a release, build one here into your installation's `release/` and run its `deploy.sh` there, in the
+Instead of a release, build one here into your installation's `worker/` and run its `deploy.sh` there, in the
 workflows' order, with their environment (`CLOUDFLARE_ENV` too, for an installation that is a Wrangler
 environment):
 
 ```sh
-just cloudflare-artifact <version> /path/to/your/installation/release
+just cloudflare-artifact <version> /path/to/your/installation/worker
 cd /path/to/your/installation
 export CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=…
-RESTATE_ADMIN_URL=… RESTATE_AUTH_TOKEN=… release/deploy.sh check-remote
-release/deploy.sh migrate
-release/deploy.sh deploy-live
-release/deploy.sh upload-app        # prints app_version_id=… (or app_promoted=true)
-release/deploy.sh deploy-engine     # prints engine_worker=… and engine_url=…
-RESTATE_ADMIN_URL=… RESTATE_AUTH_TOKEN=… RAFI_ENGINE_WORKER=… RAFI_ENGINE_URL=… release/deploy.sh register-engine
-RAFI_APP_VERSION_ID=… release/deploy.sh promote-app    # or RAFI_APP_PROMOTED=true
+RESTATE_ADMIN_URL=… RESTATE_AUTH_TOKEN=… worker/deploy.sh check-remote
+worker/deploy.sh migrate
+worker/deploy.sh deploy-live
+worker/deploy.sh upload-app        # prints app_version_id=… (or app_promoted=true)
+worker/deploy.sh deploy-engine     # prints engine_worker=… and engine_url=…
+RESTATE_ADMIN_URL=… RESTATE_AUTH_TOKEN=… RAFI_ENGINE_WORKER=… RAFI_ENGINE_URL=… worker/deploy.sh register-engine
+RAFI_APP_VERSION_ID=… worker/deploy.sh promote-app    # or RAFI_APP_PROMOTED=true
 ```
 
 The installation is the app Worker's name in your configuration, the same whether the workflows or you run it, so

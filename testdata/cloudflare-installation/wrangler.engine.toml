@@ -5,7 +5,7 @@
 # and cloudflare-deploy-test.sh). See docs/operations/cloudflare.md.
 
 name = "rafi-engine"
-main = "release/engine/build/index.js"
+main = "worker/engine/index.js"
 compatibility_date = "2026-10-01"
 
 # Restate calls it at its workers.dev address; it accepts only signed requests.

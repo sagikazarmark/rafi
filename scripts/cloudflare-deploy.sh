@@ -6,24 +6,25 @@
 # Rafi repository), so the deploy logic is the release's own, pinned to it and covered by its
 # provenance attestation. An installation's workflows (the deploy template's
 # .github/workflows: deploy.yaml and restate-cleanup.yaml) download and verify the release, unpack it into
-# release/ and run these subcommands, one step each; nothing here is specific to GitHub
+# worker/ and run these subcommands, one step each; nothing here is specific to GitHub
 # Actions.
 #
 # Usage, from the root of an installation's repository (created from the deploy template: VERSION,
 # package.json, wrangler.app.toml, wrangler.engine.toml, wrangler.live.toml, and legal/ with the
 # operator's terms.md and privacy.md, either or both, if they provide any), with the
-# release unpacked into release/ (the directory this script is in is the release; the
-# configurations point into it as release/...):
+# release unpacked into worker/ (the directory this script is in is the release; the
+# configurations point into it as worker/...: worker/app/index.js, worker/app/assets,
+# worker/engine/index.js, worker/live/index.js, worker/migrations):
 #
-#   release/deploy.sh check-remote      no downgrade (Restate's release) and the token works; reads only
-#   release/deploy.sh migrate           the D1 migrations
-#   release/deploy.sh deploy-live       the live Worker, unless its code and configuration are unchanged
-#   release/deploy.sh upload-app        the app Worker's version uploaded (deployed directly on a first install)
-#   release/deploy.sh deploy-engine     this release's engine Worker, <engine name>-v<version>
-#   release/deploy.sh register-engine   the engine Worker registered with Restate (never a downgrade)
-#   release/deploy.sh promote-app       the uploaded app version deployed, then its address and Cron
-#   release/deploy.sh cleanup           drained engine deployments removed from Restate, then their Workers deleted
-#   release/deploy.sh dry-run           legal/ copied in, `wrangler deploy --dry-run` of the three Workers; nothing remote
+#   worker/deploy.sh check-remote      no downgrade (Restate's release) and the token works; reads only
+#   worker/deploy.sh migrate           the D1 migrations
+#   worker/deploy.sh deploy-live       the live Worker, unless its code and configuration are unchanged
+#   worker/deploy.sh upload-app        the app Worker's version uploaded (deployed directly on a first install)
+#   worker/deploy.sh deploy-engine     this release's engine Worker, <engine name>-v<version>
+#   worker/deploy.sh register-engine   the engine Worker registered with Restate (never a downgrade)
+#   worker/deploy.sh promote-app       the uploaded app version deployed, then its address and Cron
+#   worker/deploy.sh cleanup           drained engine deployments removed from Restate, then their Workers deleted
+#   worker/deploy.sh dry-run           legal/ copied in, `wrangler deploy --dry-run` of the three Workers; nothing remote
 #
 # Environment:
 #   CLOUDFLARE_ENV        optional: the Wrangler environment ([env.<name>] in each configuration)
@@ -84,7 +85,7 @@
 #     key or token that doesn't work, fails it. Reads only.
 #   migrate: `wrangler d1 migrations apply DB --remote` (the app's configuration).
 #   deploy-live: the live Worker's fingerprint is the sha256 of its bundle's files
-#     (release/live/build), wrangler.live.toml's bytes and CLOUDFLARE_ENV; its tag,
+#     (worker/live/), wrangler.live.toml's bytes and CLOUDFLARE_ENV; its tag,
 #     live-<32 hex digits of it>, is the version annotation (workers/tag) of each live Worker
 #     version this deploys. When the Worker's current deployment is one version at 100% with
 #     that tag (Cloudflare's API: the script's latest deployment, then that version's
@@ -92,7 +93,7 @@
 #     `wrangler deploy` (the class's Durable Object migrations need it); any edit of
 #     wrangler.live.toml, a comment too, deploys it.
 #   upload-app: legal/terms.md and legal/privacy.md, those there are, copied into the app's
-#     static files (release/app/assets/legal/, replacing what a run before copied); then, if
+#     static files (worker/app/assets/legal/, replacing what a run before copied); then, if
 #     the app Worker has ever run a release's code (a version tagged v<version>, in its
 #     current deployment or among its recent versions),
 #     `wrangler versions upload --tag v<version>`, the new version not serving yet: output
@@ -151,7 +152,7 @@ REGISTER_ATTEMPTS=5
 ENGINE_SERVICES="Raffle EngineInfo"
 
 usage() {
-  sed -n '/^# Usage/,/^#   release\/deploy.sh dry-run/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '/^# Usage/,/^#   worker\/deploy.sh dry-run/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 step() { printf '\n==> %s\n' "$*"; }
@@ -487,16 +488,16 @@ sha256() {
 }
 
 # The live Worker's tag: live-<the first 32 hex digits of the sha256 of its bundle's files (each
-# one's path, size and content, in path order), wrangler.live.toml (its size and bytes) and
-# CLOUDFLARE_ENV>.
+# one's path, size and content, in path order: the release's live/), wrangler.live.toml (its
+# size and bytes) and CLOUDFLARE_ENV>.
 live_tag() {
-  local build="$RELEASE/live/build" rel hash
+  local bundle="$RELEASE/live" rel hash
   hash="$(
     {
       while IFS= read -r rel; do
-        printf 'build/%s\0%s\0' "$rel" "$(wc -c <"$build/$rel" | tr -d '[:space:]')"
-        cat "$build/$rel"
-      done < <(cd "$build" && find . -type f -print | sed 's|^\./||' | LC_ALL=C sort)
+        printf '%s\0%s\0' "$rel" "$(wc -c <"$bundle/$rel" | tr -d '[:space:]')"
+        cat "$bundle/$rel"
+      done < <(cd "$bundle" && find . -type f -print | sed 's|^\./||' | LC_ALL=C sort)
       printf 'wrangler.live.toml\0%s\0' "$(wc -c <"$LIVE_CONFIG" | tr -d '[:space:]')"
       cat "$LIVE_CONFIG"
       printf 'CLOUDFLARE_ENV\0%s\0' "${CLOUDFLARE_ENV:-}"

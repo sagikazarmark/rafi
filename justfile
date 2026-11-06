@@ -97,12 +97,12 @@ workers:
 
 # Nothing of an installation's is in the artifact: its configuration (the deploy
 # template's wrangler.app.toml, wrangler.engine.toml and wrangler.live.toml, which
-# point into this layout as release/) and its legal documents, which deploy.sh
+# point into this layout as worker/) and its legal documents, which deploy.sh
 # copies into app/assets/legal/, are its own. The Workers' recipes run in their
 # own directories: they get `out` as an absolute path, and RAFI_VERSION, which
 # crates/server/build.rs compiles in, as `version`.
 
-# Build what a Cloudflare release ships, into one directory: VERSION (`version`: RAFI_VERSION, or git describe), app/ (apps/worker-app: build/ and assets/, without legal/), engine/build/ (apps/worker-engine), live/build/ (apps/worker-live), migrations/ (the D1 migrations, migrations/sqlite's files) and deploy.sh (scripts/cloudflare-deploy.sh).
+# Build what a Cloudflare release ships, into one directory: VERSION (`version`: RAFI_VERSION, or git describe), app/ (apps/worker-app: index.js, index_bg.wasm and assets/, without legal/), engine/ and live/ (apps/worker-engine, apps/worker-live: index.js and index_bg.wasm), migrations/ (the D1 migrations, migrations/sqlite's files) and deploy.sh (scripts/cloudflare-deploy.sh).
 cloudflare-artifact version=env("RAFI_VERSION", `git describe --tags --always --dirty 2>/dev/null || echo unknown`) out="build/cloudflare/worker":
     rm -rf "{{ out }}"
     mkdir -p "{{ out }}/migrations"
@@ -121,7 +121,7 @@ cloudflare-tarball version out="build/cloudflare": (cloudflare-artifact version 
     # The same bytes from the same files (sorted, every time source_date_epoch,
     # no owner, modes 644 and 755, gzip without a name or a time): two builds
     # of a tag can be compared. GNU tar (the devenv shell's). No leading
-    # directory: an installation unpacks it into its release/ as it is.
+    # directory: an installation unpacks it into its worker/ as it is.
     # tar runs gzip itself: piped, sh (no pipefail) would hide tar's failure.
     tar -C "{{ absolute_path(out / "worker") }}" \
         --sort=name --mtime="@{{ source_date_epoch }}" \

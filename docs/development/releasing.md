@@ -6,13 +6,18 @@ Workers release, one asset, `worker.tar.gz` (`just cloudflare-artifact`, packed 
 with at the top level of the archive:
 
 - `VERSION`;
-- `app/`: the app Worker (`apps/worker-app`), `build/` and its static files, `assets/` (without `legal/`, an
-  installation's);
-- `engine/`: the raffle engine Worker (`apps/worker-engine`), `build/`;
-- `live/`: the live Worker (`apps/worker-live`, the `RaffleRoom` Durable Objects), `build/`;
+- `app/`: the app Worker (`apps/worker-app`), `index.js` and `index_bg.wasm`, and its static files, `assets/`
+  (without `legal/`, an installation's);
+- `engine/`: the raffle engine Worker (`apps/worker-engine`), `index.js` and `index_bg.wasm`;
+- `live/`: the live Worker (`apps/worker-live`, the `RaffleRoom` Durable Objects), `index.js` and `index_bg.wasm`;
 - `migrations/`: the D1 migrations (`migrations/sqlite`'s `.sql` files);
 - `deploy.sh`: the deploy itself (`scripts/cloudflare-deploy.sh`; its header says what each subcommand does), so an
   installation deploys a release with that release's own logic, attested with it.
+
+Each Worker is `worker-build`'s module and its WebAssembly alone: not its `build/worker/shim.mjs` (a
+re-export of `index.js`, for configurations older than `worker-build` 0.8) or `build/package.json` (an npm
+manifest), which nothing deploys. An installation unpacks the archive into `worker/`, which its configurations
+point into (`main = "worker/app/index.js"`).
 
 The combined Worker (`apps/worker`) is for local development only. Self-hosting builds from the tag.
 
@@ -67,7 +72,7 @@ act or should know:
   a change to the workflows' secrets;
 - a wrangler or Restate CLI `deploy.sh` now needs newer than an installation's `package-lock.json` may pin
   (operators run `npm update` and commit the lockfile), or a change to the template's `package.json`;
-- whether the live Worker changed (its `live/build` differs from the previous release's): a deploy of a release
+- whether the live Worker changed (its `live/` differs from the previous release's): a deploy of a release
   that changes it drops every live connection, so say so;
 - when a migration or the live channel would break the previous release's engine while it drains
   ([Upgrades](../operations/upgrades.md#what-a-deploy-does-to-a-raffle-in-flight)), or a change to the live
@@ -76,7 +81,7 @@ act or should know:
 CI's `cloudflare` job (`just cloudflare-deploy-test`, `just cloudflare-tarball-check`) builds a development tarball,
 `0.0.0`, on every push and checks it: its layout, and its `deploy.sh dry-run` from a copy of
 `testdata/cloudflare-installation` (an installation's configuration, as the deploy template ships it) with the
-tarball unpacked into `release/` (the devenv's wrangler, the Workers' names read from its dry runs), at the
+tarball unpacked into `worker/` (the devenv's wrangler, the Workers' names read from its dry runs), at the
 configurations' top level and as a Wrangler environment (`[env.eu]` added to each configuration, with
 `RAFI_DO_JURISDICTION = "eu"`, `VERSION.eu`, `CLOUDFLARE_ENV=eu`). A release checks nothing: tag a commit CI passed.
 Locally, `just cloudflare-tarball-check <version>` builds and checks the same, in `build/cloudflare`.

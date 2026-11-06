@@ -13,10 +13,9 @@ build:
 dry-run: assets
     wrangler deploy --dry-run
 
-# The Worker as a release ships it.
+# The Worker as a release ships it, into `out` (a release's app/): the module and its WebAssembly (not worker-build's shim.mjs or package.json, which nothing deploys) and the static files.
 artifact out: assets build
     rm -rf "{{ out }}"
     mkdir -p "{{ out }}"
-    cp -R build "{{ out }}/build"
-    rm -f "{{ out }}/build/.gitignore"
+    cp build/index.js build/index_bg.wasm "{{ out }}/"
     cp -R ../worker/worker-assets "{{ out }}/assets"
