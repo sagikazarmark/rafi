@@ -171,7 +171,7 @@ section.
 
 ## Renamed settings
 
-Before the first release (2026-11), three names changed, with no aliases. Rename them wherever you set them: a
+Before the first release (2026-11), three settings were renamed, with no aliases. Rename them wherever you set them: a
 native server's environment, an installation's `.dev.vars` and Worker secrets (`wrangler secret put` the new name,
 `wrangler secret delete` the old), its `wrangler.engine.toml`, and a development machine's `.env` or devenv
 settings.
@@ -179,7 +179,7 @@ settings.
 | Old | New |
 |---|---|
 | `RAFI_ENGINE_INGRESS_URL` | `RESTATE_INGRESS_URL` |
-| `RAFI_ENGINE_API_KEY` | `RESTATE_INGRESS_API_KEY` |
+| `RAFI_ENGINE_API_KEY`, then `RESTATE_INGRESS_API_KEY` | `RESTATE_AUTH_TOKEN` |
 | `RAFI_RESTATE_ENDPOINT__IDENTITY_KEYS` on the engine Worker | `RESTATE_IDENTITY_KEYS` (the native engine keeps `RAFI_RESTATE_ENDPOINT__IDENTITY_KEYS`) |
 
 The naming rule is in the [configuration reference](../reference/configuration.md).

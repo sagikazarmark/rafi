@@ -414,9 +414,10 @@ Rotating it is in the [runbook](runbook.md#rotating-secrets).
 
 ## The Restate keys
 
-Restate Cloud's API keys each have a role.
+Restate Cloud's API keys each have a role. Both keys go by the Restate CLI's name, `RESTATE_AUTH_TOKEN`, but they are
+two keys in two places: one a secret on the app Worker, the other a GitHub secret.
 
-- **The app's key**, `RESTATE_INGRESS_API_KEY`, a secret on the app Worker: the app only invokes the engine through the
+- **The app's key**, `RESTATE_AUTH_TOKEN`, a secret on the app Worker: the app only invokes the engine through the
   ingress (`https://<env-id>.env.<region>.restate.cloud:8080`, `<env-id>` the environment's ID without `env_`;
   `RESTATE_INGRESS_URL`), never the admin API. Give it the narrowest role the console offers that can call the
   ingress (Restate's guides name **Admin** for deploying and **Full** for tunnels); if none narrower than **Full**
@@ -676,7 +677,7 @@ or undos/min per organizer, 600/min live connections). They are soft, per Cloudf
 | `/healthz` answers `500 misconfigured` | Missing secrets, or a document without its version (`legal/terms.md: no front matter`): the reason is in the answer when it names no value, and in the app Worker's logs. |
 | Organizers sign in to Clerk but the admin refuses them | The app was opened at an address other than `RAFI_PUBLIC_URL`'s origin, whose sessions Rafi refuses (their `azp`): use that address, and with a custom domain keep `workers_dev = false` ([the app's address](#the-apps-address)). Or `RAFI_PUBLIC_URL` isn't exactly the address's origin (another scheme or host, or a path). |
 | The app's workers.dev address doesn't answer | `workers_dev = false` with no routes leaves the app no address; a first install's `wrangler deploy` or the next `promote-app` turns workers.dev on once `workers_dev = true`. |
-| The admin says the raffle engine can't be reached | `RESTATE_INGRESS_URL` or `RESTATE_INGRESS_API_KEY` wrong, or Restate Cloud down: the [runbook](runbook.md#when-the-raffle-engine-is-down-during-an-event). |
+| The admin says the raffle engine can't be reached | `RESTATE_INGRESS_URL` or the app Worker's `RESTATE_AUTH_TOKEN` wrong (`HTTP 401` in the app's log: the key isn't this environment's), or Restate Cloud down: the [runbook](runbook.md#when-the-raffle-engine-is-down-during-an-event). |
 | Phones don't update live | The app's logs (`nudging … failed`), the live Worker's logs; `RAFFLE_ROOM` bound with `script_name` the live Worker's name; the same `database_id` and `RAFI_DO_JURISDICTION` in all three configurations (nothing compares them: the app and the engine in different jurisdictions reach different objects). |
 | The cleanup reports a deployment draining for days | A paused invocation: resume or kill it ([Upgrades](upgrades.md#on-workers-automatic)). |
 | The cleanup fails: `… couldn't be listed: nothing removed or deleted`, or `listing Restate's deployments: …` | A listing failed (the token, the Restate key or admin URL, or either service down), so it touched nothing: fix the secret, or run it again later. |

@@ -12,7 +12,8 @@ Empty values count as unset everywhere. Flags take `1`/`true`/`yes`/`on`.
 
 The names: Rafi's own settings are `RAFI_*`. A third-party service's values go by that service's names: `CLERK_*`
 are Clerk's keys, and `RESTATE_*` what the app and the engine Worker are given of Restate's (`RESTATE_INGRESS_URL`,
-the name the Restate CLI uses for the same URL; `RESTATE_INGRESS_API_KEY`, the app's key for it; and on Workers
+the name the Restate CLI uses for the same URL; `RESTATE_AUTH_TOKEN`, the CLI's name for the API key, here the
+app's key for the ingress; and on Workers
 `RESTATE_IDENTITY_KEYS`). `restate-server` ignores `RESTATE_*` names it doesn't know, so it can share an environment
 with the app. The native engine's settings keep their structured names: `rafi-restate` reads `RAFI_RESTATE_*`, with
 `__` between levels, so the engine Worker's `RESTATE_IDENTITY_KEYS` is the native engine's
@@ -36,7 +37,7 @@ var and a secret of the same name).
 | `CLERK_PUBLISHABLE_KEY` | | Clerk's publishable key (`pk_live_…`, `pk_test_…`: a production or a development instance, both accepted in release builds). Required unless `RAFI_DEV_AUTH` is set: the server hands it to the web app at `/config.js`, which signs organizers in with it, and names the Clerk host it encodes in the web app's Content-Security-Policy, so a key no host decodes from is refused. Not a secret, but the installation's: nothing of an installation's is compiled into the web app. |
 | `RAFI_CSP` | `enforce` | The pages' Content-Security-Policy ([routes](routes.md#security-headers)): `enforce`, or `report-only`, which sends it as `Content-Security-Policy-Report-Only`. Browsers then log what it would refuse in their consoles and refuse nothing; framing stays denied. An escape hatch for a policy that breaks the admin (Clerk loading from a host this release doesn't know, say) until an upgrade: the app logs a warning at start while it is on. |
 | `RESTATE_INGRESS_URL` | | The raffle engine's Restate ingress. Without it, draws can't start (required on Workers). |
-| `RESTATE_INGRESS_API_KEY` | | Restate Cloud: an API key with ingress access. Required on Workers (a `dev` build excepted). |
+| `RESTATE_AUTH_TOKEN` | | Restate Cloud: an API key with ingress access, sent as a bearer token. Required on Workers (a `dev` build excepted). |
 | `RAFI_ENGINE_TIMEOUT_SECS` | `90` | How long a call to the raffle engine waits. A command queued behind a draw that is waiting for its beacon may take the engine's drand lead plus its fetch timeout. Past this timeout the command is accepted and applies later. Keep it above the engine's `lead_secs + timeout_secs`. |
 | `RAFI_DRAND_CHAIN` | quicknet | The drand chain new raffles commit to, as a chain hash. Release builds accept only public drand chains. `mock` (a public test chain, **not** verifiable) needs a `mock-drand` build. The raffle engine must draw from the same chain: the app checks this and refuses to start a draw otherwise. |
 | `RAFI_DRAND_MOCK` | off | Development alias for `RAFI_DRAND_CHAIN=mock` |

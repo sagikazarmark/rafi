@@ -122,7 +122,7 @@ fn app(env: &Env, cfg: Config) -> anyhow::Result<App> {
     // On Workers the ingress is Restate Cloud's, which wants a key; without
     // one, draws would fail at the first call with nothing in the log.
     if cfg.restate.api_key.is_empty() && !dev {
-        anyhow::bail!("RESTATE_INGRESS_API_KEY is not set");
+        anyhow::bail!("RESTATE_AUTH_TOKEN is not set");
     }
     let auth = if cfg.dev_auth {
         None

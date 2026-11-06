@@ -294,7 +294,7 @@ impl Config {
                     .unwrap_or_default()
                     .trim_end_matches('/')
                     .to_owned(),
-                api_key: var("RESTATE_INGRESS_API_KEY").unwrap_or_default(),
+                api_key: var("RESTATE_AUTH_TOKEN").unwrap_or_default(),
                 timeout_secs: u64::try_from(int(
                     "RAFI_ENGINE_TIMEOUT_SECS",
                     i64::try_from(RestateConfig::DEFAULT_TIMEOUT_SECS).unwrap_or(90),
