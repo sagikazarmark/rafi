@@ -5,7 +5,7 @@
 # and cloudflare-deploy-test.sh). See docs/operations/cloudflare.md.
 
 name = "rafi-app"
-main = "release/app/build/index.js"
+main = "worker/app/index.js"
 compatibility_date = "2026-10-01"
 
 # Its address, the origin RAFI_PUBLIC_URL names: by default
@@ -17,7 +17,7 @@ preview_urls = false
 
 # The web app's files and your legal documents, if any (deploy.sh copies legal/ in).
 [assets]
-directory = "release/app/assets"
+directory = "worker/app/assets"
 binding = "ASSETS"
 
 # Your database; the same ID in all three files.
@@ -25,7 +25,7 @@ binding = "ASSETS"
 binding = "DB"
 database_name = "rafi"
 database_id = "00000000-0000-0000-0000-000000000000"
-migrations_dir = "release/migrations"
+migrations_dir = "worker/migrations"
 
 # The live Worker's class; script_name is wrangler.live.toml's name.
 [[durable_objects.bindings]]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks the Cloudflare deploy script (scripts/cloudflare-deploy.sh, a release's deploy.sh)
 # without a Cloudflare or Restate account: each subcommand run as an installation's workflows
-# run it, from a copy of testdata/cloudflare-installation with a release laid out in release/, against a
+# run it, from a copy of testdata/cloudflare-installation with a release laid out in worker/, against a
 # stubbed wrangler CLI and Restate CLI (which log their arguments; the wrangler stub's dry runs
 # write a deploy entry with the Worker's name into its ND-JSON output, as wrangler does) and a
 # fake Cloudflare and Restate admin API (a local node HTTP server answering from a state file
@@ -241,21 +241,21 @@ BASE="http://127.0.0.1:$(cat "$TMP/port")"
 
 # A release as `just cloudflare-artifact` lays it out (empty files will do, the live Worker's
 # bundle with something in it), unpacked into an installation (a copy of the fixture) as
-# release/.
+# worker/.
 INSTALL="$TMP/installation"
 mkdir -p "$INSTALL"
 cp -R "$ROOT/testdata/cloudflare-installation/." "$INSTALL/"
-rm -rf "$INSTALL/release" "$INSTALL/.wrangler" "$INSTALL/.dev.vars" "$INSTALL/node_modules"
+rm -rf "$INSTALL/worker" "$INSTALL/.wrangler" "$INSTALL/.dev.vars" "$INSTALL/node_modules"
 # The operator's documents, the tests' own.
 rm -rf "$INSTALL/legal"
 mkdir "$INSTALL/legal"
 printf -- '---\nversion: test-1\n---\n# Terms\n' >"$INSTALL/legal/terms.md"
 printf -- '---\nversion: test-1\n---\n# Privacy notice\n' >"$INSTALL/legal/privacy.md"
-RELEASE="$INSTALL/release"
-mkdir -p "$RELEASE/app/build" "$RELEASE/app/assets" "$RELEASE/engine/build" "$RELEASE/live/build" "$RELEASE/migrations"
-touch "$RELEASE/app/build/index.js" "$RELEASE/engine/build/index.js"
-echo 'export { RaffleRoom, default };' >"$RELEASE/live/build/index.js"
-echo 'wasm' >"$RELEASE/live/build/index_bg.wasm"
+RELEASE="$INSTALL/worker"
+mkdir -p "$RELEASE/app/assets" "$RELEASE/engine" "$RELEASE/live" "$RELEASE/migrations"
+touch "$RELEASE/app/index.js" "$RELEASE/app/index_bg.wasm" "$RELEASE/engine/index.js" "$RELEASE/engine/index_bg.wasm"
+echo 'export { RaffleRoom, default };' >"$RELEASE/live/index.js"
+echo 'wasm' >"$RELEASE/live/index_bg.wasm"
 cp "$ROOT"/migrations/sqlite/*.sql "$RELEASE/migrations/"
 cp "$SCRIPT" "$RELEASE/deploy.sh"
 echo "0.1.0" >"$RELEASE/VERSION"
@@ -275,7 +275,7 @@ COMMON=(WRANGLER="$BIN/wrangler" RESTATE="$BIN/restate" STUB_LOG="$LOG"
   STUB_WRANGLER_FAIL= STUB_NO_VERSION_ID= STUB_DRY_NAMES= STUB_DRY_NO_NAME= STUB_RESTATE_LIST_FAIL=
   STUB_RESTATE_REMOVE_FAIL= GITHUB_OUTPUT= GITHUB_STEP_SUMMARY=)
 
-# ds <subcommand> [<VAR=value>...]: runs release/deploy.sh <subcommand> in the installation, its
+# ds <subcommand> [<VAR=value>...]: runs worker/deploy.sh <subcommand> in the installation, its
 # output in $TMP/out, its exit status in CODE; the log, the outputs and the report fresh.
 ds() {
   local sub="$1"
@@ -285,7 +285,7 @@ ds() {
   : >"$REPORT"
   curl -s -o /dev/null "$BASE/__reset"
   CODE=0
-  (cd "$INSTALL" && env "${COMMON[@]}" "$@" release/deploy.sh ${sub:+"$sub"}) >"$TMP/out" 2>&1 || CODE=$?
+  (cd "$INSTALL" && env "${COMMON[@]}" "$@" worker/deploy.sh ${sub:+"$sub"}) >"$TMP/out" 2>&1 || CODE=$?
 }
 # ran <name> <exit status> [<text in the output>...]
 ran() {
@@ -453,7 +453,7 @@ ran "check, gone, exits 2" 2
 ds deploy-rooms
 ran "the old deploy-rooms exits 2" 2
 ds --help
-ran "--help" 0 "release/deploy.sh register-engine" "release/deploy.sh deploy-live"
+ran "--help" 0 "worker/deploy.sh register-engine" "worker/deploy.sh deploy-live"
 ds dry-run PATH="$NOJQ_BIN"
 ran "no jq: a clear failure" 1 "jq isn't installed"
 if [ -s "$LOG" ]; then fail "something ran without jq: $(cat "$LOG")"; else pass "nothing runs without jq"; fi
@@ -489,7 +489,7 @@ add_env() {
     [ -z "$app_name" ] || printf 'name = "%s"\n' "$app_name"
     # Its own address, as INSTALL.md's [env.eu] writes it out (a custom domain here).
     printf 'workers_dev = false\nroutes = [{ pattern = "%s.raffles.example", custom_domain = true }]\n' "$env"
-    printf '[[env.%s.d1_databases]]\nbinding = "DB"\ndatabase_name = "rafi"\ndatabase_id = "%s"\nmigrations_dir = "release/migrations"\n' "$env" "$DB_ID"
+    printf '[[env.%s.d1_databases]]\nbinding = "DB"\ndatabase_name = "rafi"\ndatabase_id = "%s"\nmigrations_dir = "worker/migrations"\n' "$env" "$DB_ID"
     printf '[[env.%s.durable_objects.bindings]]\nname = "RAFFLE_ROOM"\nclass_name = "RaffleRoom"\nscript_name = "%s"\n' "$env" "$live_name"
     printf '[env.%s.vars]\nRAFI_DO_JURISDICTION = "eu"\n' "$env"
   } >>"$APP"
@@ -603,12 +603,12 @@ ran "wrangler.live.toml changed: deployed" 0
 not_logged "with another tag" "--tag $TAG "
 in_order "the live Worker deployed after its configuration changed" "wrangler deploy -c $LIVE --tag live-"
 restore
-echo 'more' >>"$RELEASE/live/build/index_bg.wasm"
+echo 'more' >>"$RELEASE/live/index_bg.wasm"
 ds deploy-live
 ran "the bundle changed: deployed" 0
 not_logged "the bundle changed: with another tag" "--tag $TAG "
 in_order "the live Worker deployed after its bundle changed" "wrangler deploy -c $LIVE --tag live-"
-echo 'wasm' >"$RELEASE/live/build/index_bg.wasm"
+echo 'wasm' >"$RELEASE/live/index_bg.wasm"
 ds deploy-live
 ran "the bundle as it was: the same fingerprint" 0 "unchanged (it serves $TAG)"
 add_env eu

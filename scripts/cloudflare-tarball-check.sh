@@ -6,10 +6,12 @@
 # has its three configurations, with the app on its workers.dev address by default
 # (workers_dev = true, a custom domain's routes commented out).
 # Then the tarball (worker.tar.gz, its files at the top level: VERSION, app/,
-# engine/build/, live/build/, migrations/, deploy.sh): its layout and each
-# Worker's exports checked (RaffleRoom the live Worker's alone); then a copy
-# of the fixture with the tarball unpacked into its release/, as an
-# installation's workflow unpacks it, runs `release/deploy.sh dry-run` with the devenv's wrangler
+# engine/, live/, migrations/, deploy.sh; each Worker's index.js and
+# index_bg.wasm in its own directory, the app's assets/ beside them): its
+# layout and each Worker's exports checked (RaffleRoom the live Worker's
+# alone); then a copy of the fixture with the tarball unpacked into its
+# worker/, as an installation's workflow unpacks it, runs
+# `worker/deploy.sh dry-run` with the devenv's wrangler
 # (WRANGLER; nothing installed, nothing asked of the network): the release's
 # own VERSION read (deploy.sh reads no version file and looks for no
 # placeholder), no legal documents copied (the fixture has none), and
@@ -73,38 +75,40 @@ echo "ok   testdata/cloudflare-installation: wrangler.{app,engine,live}.toml, th
 step "the tarball: $TARBALL ($VERSION)"
 if command -v sha256sum >/dev/null; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
 $SHA256 "$TARBALL"
-# What an installation's release/ is: these at the top level, nothing else,
+# What an installation's worker/ is: these at the top level, nothing else,
 # and none of an installation's documents.
 listing="$(tar -tzf "$TARBALL")"
 top="$(echo "$listing" | cut -d/ -f1 | LC_ALL=C sort -u | tr '\n' ' ')"
 [ "$top" = "VERSION app deploy.sh engine live migrations " ] || fail "worker.tar.gz has at its top level: $top"
-for file in VERSION deploy.sh app/build/index.js app/assets/_headers engine/build/index.js \
-  live/build/index.js migrations/0001_init.sql; do
+for file in VERSION deploy.sh app/index.js app/index_bg.wasm app/assets/_headers engine/index.js \
+  engine/index_bg.wasm live/index.js live/index_bg.wasm migrations/0001_init.sql; do
   grep -qx "$file" <<<"$listing" || fail "worker.tar.gz has no $file"
 done
-# engine/ and live/ are their build/ alone; migrations/ the D1 migrations' files alone.
-! grep -vE '^(engine|live)/(build/.*)?$' <<<"$(grep -E '^(engine|live)/' <<<"$listing")" \
-  || fail "worker.tar.gz has more than build/ in engine/ or live/"
+# Each Worker is its module and its WebAssembly (the app's static files besides), nothing
+# of worker-build's else (shim.mjs, package.json); migrations/ the D1 migrations' files alone.
+! grep -vE '^(app|engine|live)/(index\.js|index_bg\.wasm)?$|^app/assets/' \
+  <<<"$(grep -E '^(app|engine|live)/' <<<"$listing")" \
+  || fail "worker.tar.gz has more than index.js and index_bg.wasm (and the app's assets/) in app/, engine/ or live/"
 ! grep -vE '^migrations/([0-9]{4}_[a-z0-9_]+\.sql)?$' <<<"$(grep '^migrations/' <<<"$listing")" \
   || fail "worker.tar.gz has more than the D1 migrations' .sql files in migrations/"
 ! grep -q '^app/assets/legal' <<<"$listing" || fail "worker.tar.gz has app/assets/legal/: an installation's"
-echo "ok   worker.tar.gz: VERSION, app/, engine/build/, live/build/, migrations/ and deploy.sh"
+echo "ok   worker.tar.gz: VERSION, app/, engine/, live/, migrations/ and deploy.sh"
 
-# installation <dir>: a copy of the fixture with the tarball unpacked into its release/.
+# installation <dir>: a copy of the fixture with the tarball unpacked into its worker/.
 installation() {
   rm -rf "$1"
-  mkdir -p "$1/release"
+  mkdir -p "$1/worker"
   cp -R "$fixture/." "$1/"
-  tar -xzf "$TARBALL" -C "$1/release"
+  tar -xzf "$TARBALL" -C "$1/worker"
 }
-# dry_run <dir> [<VAR=value>...]: release/deploy.sh dry-run there with WRANGLER (nothing
+# dry_run <dir> [<VAR=value>...]: worker/deploy.sh dry-run there with WRANGLER (nothing
 # installed), its output in DRY, its JSON in <dir>/artifacts/dry-run.
 dry_run() {
   local dir="$1"
   shift
   DRY="$(cd "$dir" && env WRANGLER="$WRANGLER" RAFI_ARTIFACTS_DIR="$dir/artifacts" \
-    "$@" release/deploy.sh dry-run 2>&1)" \
-    || { echo "$DRY" | tail -40 >&2; fail "release/deploy.sh dry-run failed in $dir"; }
+    "$@" worker/deploy.sh dry-run 2>&1)" \
+    || { echo "$DRY" | tail -40 >&2; fail "worker/deploy.sh dry-run failed in $dir"; }
   [ ! -e "$dir/node_modules" ] || fail "something was installed in $dir although WRANGLER was given"
 }
 # Each Worker's part of a dry run's output, by deploy.sh's step lines: from its own to the next.
@@ -173,7 +177,7 @@ installation "$dir"
 # list): the RaffleRoom class is the live Worker's alone, since a Worker
 # exporting it would host a second class of that name.
 exports() {
-  grep -o 'export *{[^}]*}' "$dir/release/$1/build/index.js" | tail -1 \
+  grep -o 'export *{[^}]*}' "$dir/worker/$1/index.js" | tail -1 \
     | sed 's/^export *{//; s/}$//' | tr ',' '\n' | sed 's/.* as //; s/^ *//; s/ *$//' | LC_ALL=C sort | paste -sd ' ' -
 }
 for worker in app engine live; do
@@ -186,10 +190,10 @@ for worker in app engine live; do
   fi
   echo "ok   the $worker Worker exports: $list"
 done
-[ -x "$dir/release/deploy.sh" ] || fail "release/deploy.sh isn't executable"
+[ -x "$dir/worker/deploy.sh" ] || fail "worker/deploy.sh isn't executable"
 dry_run "$dir"
 # The fixture has no legal documents (each is the operator's, and optional): none copied.
-[ ! -e "$dir/release/app/assets/legal" ] || fail "deploy.sh put legal documents the installation hasn't into release/app/assets/legal/"
+[ ! -e "$dir/worker/app/assets/legal" ] || fail "deploy.sh put legal documents the installation hasn't into worker/app/assets/legal/"
 echo "ok   deploy.sh copied no legal documents, the installation having none"
 grep -qF "Rafi $VERSION (the release's VERSION)" <<<"$DRY" || fail "deploy.sh didn't read the release's VERSION"
 check_dry_run "$dir" rafi-app rafi-live rafi-engine ""
@@ -218,7 +222,7 @@ database="$(sed -n 's/^database_id = \(".*"\)$/\1/p' "$dir/wrangler.app.toml")"
 {
   printf '\n[env.eu]\n'
   printf 'workers_dev = false\nroutes = [{ pattern = "raffle.example.eu", custom_domain = true }]\n'
-  printf '[[env.eu.d1_databases]]\nbinding = "DB"\ndatabase_name = "rafi"\ndatabase_id = %s\nmigrations_dir = "release/migrations"\n' "$database"
+  printf '[[env.eu.d1_databases]]\nbinding = "DB"\ndatabase_name = "rafi"\ndatabase_id = %s\nmigrations_dir = "worker/migrations"\n' "$database"
   printf '[[env.eu.durable_objects.bindings]]\nname = "RAFFLE_ROOM"\nclass_name = "RaffleRoom"\nscript_name = "rafi-live-eu"\n'
   n=2000
   for limit in JOIN_PER_RAFFLE_LIMITER JOIN_PER_EMAIL_LIMITER CONNECT_LIMITER ADD_LIMITER; do

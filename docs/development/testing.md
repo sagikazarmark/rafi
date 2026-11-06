@@ -206,7 +206,7 @@ export RAFI_TEST_POSTGRES_URL=postgres://rafi@127.0.0.1:54329/rafi_test
 CI's `cloudflare` job checks the deploy script and the tarball a tag would build. First the deploy
 script's own checks, `just cloudflare-deploy-test`
 (`scripts/cloudflare-deploy-test.sh`: each subcommand run from a copy of the fixture with a release laid out in
-`release/`, against a stubbed wrangler and Restate CLI and a fake Cloudflare and Restate admin API, a local node
+`worker/`, against a stubbed wrangler and Restate CLI and a fake Cloudflare and Restate admin API, a local node
 server; the wrangler stub's dry runs write a `deploy` entry with the Worker's name into its ND-JSON output, as
 wrangler does: `dry-run` (`legal/`'s documents copied in, the tests' own: both, the terms alone with what a run
 before copied removed, and none at all; the release's `VERSION` the one deployed, the installation's version files not read and
@@ -229,7 +229,8 @@ them); the fake server is stopped on exit and on a signal). Then `just cloudflar
 (`scripts/cloudflare-tarball-check.sh`, CI's as `0.0.0`, a development build) builds `worker.tar.gz` as a tag
 builds it and checks it, in `build/cloudflare/check`: that the fixture's `wrangler.app.toml` puts the app on
 workers.dev by default (`workers_dev = true`, the custom domain's `routes` commented out); then the tarball's layout
-and each Worker's exports checked, unpacked into a copy of the template's `release/`, whose `release/deploy.sh
+(each Worker's `index.js` and `index_bg.wasm` and nothing else of `worker-build`'s, the app's `assets/` beside them)
+and each Worker's exports checked, unpacked into a copy of the template's `worker/`, whose `worker/deploy.sh
 dry-run` (with the devenv's wrangler through `WRANGLER`, nothing installed, nothing asked of the network) copies
 no legal documents (the fixture has none) and dry-deploys the live Worker `rafi-live` (`DB`, `RAFFLE_ROOM` its own), the engine Worker
 `rafi-engine`, this release's `rafi-engine-v<version>` (`DB`, `RAFFLE_ROOM` defined in `rafi-live`, the identity
