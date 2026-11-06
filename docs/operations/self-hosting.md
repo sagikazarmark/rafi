@@ -57,7 +57,7 @@ The app reaches the engine through Restate's **ingress**. Restate reaches `rafi-
   `nix-restate`). By
   default its ingress is on `:8080`, its admin API on `:9070`, and its data in `./restate-data`. If it shares a
   machine with `rafi`, move one of them off `:8080`.
-- **Restate Cloud:** create an environment, an API key with ingress access for the app (`RESTATE_INGRESS_API_KEY`), and set
+- **Restate Cloud:** create an environment, an API key with ingress access for the app (`RESTATE_AUTH_TOKEN`), and set
   the engine's `endpoint.identity_keys` to the environment's public key, so it only accepts requests signed by your
   Restate.
 

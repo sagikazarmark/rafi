@@ -280,7 +280,7 @@ if command -v dx >/dev/null; then
   # without its front matter refuses every request, naming the file. legal/
   # is removed after each (by cleanup too, should this run die in between).
   secrets=(--var RAFI_POW_KEY:workers-check-workers-check-workers-check
-    --var RESTATE_INGRESS_API_KEY:workers-check
+    --var RESTATE_AUTH_TOKEN:workers-check
     --var CLERK_SECRET_KEY:sk_test_workerscheck
     --var CLERK_PUBLISHABLE_KEY:pk_test_cmFmaS10ZXN0LmNsZXJrLmFjY291bnRzLmRldiQ
     --var "RAFI_OPERATOR_NAME:Workers Check" --var RAFI_OPERATOR_EMAIL:privacy@workers-check.invalid)
@@ -354,7 +354,7 @@ if command -v dx >/dev/null; then
     RESTATE_INGRESS_URL=http://127.0.0.1:9 CLERK_SECRET_KEY="$CLERK_TEST_SECRET_KEY" \
       serve apps/worker 8795 /healthz --var "RAFI_PUBLIC_URL:http://127.0.0.1:8795" \
       --var RAFI_POW_KEY:workers-check-workers-check-workers-check \
-      --var RESTATE_INGRESS_API_KEY:workers-check \
+      --var RESTATE_AUTH_TOKEN:workers-check \
       --var "CLERK_PUBLISHABLE_KEY:$CLERK_TEST_PUBLISHABLE_KEY" \
       --var "RAFI_OPERATOR_NAME:Workers Check" --var RAFI_OPERATOR_EMAIL:privacy@workers-check.invalid
     CHROMIUM="$CHROMIUM" APP=http://127.0.0.1:8795 node "$ROOT/apps/worker/clerk.mjs" "$STATE/chrome-clerk"
