@@ -15,7 +15,7 @@ dioxus-field = { version = "0.8.0", default-features = false }
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", rev = "9a758255ea26e2b20c8cecf4c1c946feb9e71da7", version = "0.0.1", default-features = false, features = ["router"] }
 dioform = { version = "0.9", features = ["dioxus-field"] }
 futures-util = "0.3"
-gloo-net = { version = "0.7", default-features = false, features = ["http", "json"] }
+gloo-net = { version = "0.8", default-features = false, features = ["http", "json"] }
 gloo-timers = { version = "0.4", features = ["futures"] }
 js-sys = { workspace = true }
 partyline-dioxus = "0.3"
