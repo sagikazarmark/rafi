@@ -27,5 +27,5 @@ rafi-engine = { workspace = true, features = ["drand"] }
 rafi-engine-restate = { workspace = true }
 rafi-store = { workspace = true }
 restate-sdk = { workspace = true, features = ["rust_crypto"] }
-tower-worker-fetch = "0.2"
+tower-worker-fetch = "0.3"
 worker = { workspace = true, features = ["http"] }
